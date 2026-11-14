@@ -1,0 +1,6 @@
+{
+  "name": "DON'T LOOK BACK",
+  "description": "Videojuego de terror psicológico 3D en primera persona dentro de un edificio abandonado, desarrollado con Three.js y Vite.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
