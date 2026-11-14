@@ -1,0 +1,19 @@
+{
+  "name": "Dont Look Back - Monster Texture Pack",
+  "version": "1.0",
+  "resolution": [
+    1024,
+    1024
+  ],
+  "maps": {
+    "baseColor": "textures/monster_albedo.png",
+    "normalOpenGL": "textures/monster_normal_opengl.png",
+    "normalDirectX": "textures/monster_normal_directx.png",
+    "roughness": "textures/monster_roughness.png",
+    "ambientOcclusion": "textures/monster_ao.png",
+    "metallic": "textures/monster_metallic.png",
+    "uvMask": "textures/monster_uv_mask.png"
+  },
+  "contains_model": false,
+  "note": "Derived from generated concept-sheet illustration; model-specific UV unwrapping required."
+}

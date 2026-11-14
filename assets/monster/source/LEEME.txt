@@ -1,0 +1,45 @@
+DON'T LOOK BACK - PAQUETE DE TEXTURAS DEL MONSTRUO
+====================================================
+
+CONTENIDO
+- textures/monster_albedo.png         : color base / piel
+- textures/monster_normal_opengl.png  : relieve normal para Three.js, Blender (OpenGL)
+- textures/monster_normal_directx.png : alternativa para motores que usan DirectX
+- textures/monster_roughness.png      : rugosidad (gris, blanco = mas rugoso)
+- textures/monster_ao.png             : sombras en grietas, ambient occlusion
+- textures/monster_metallic.png       : metalizado = 0 (piel no metalica)
+- textures/monster_uv_mask.png        : siluetas UV aproximadas de referencia
+- reference/original_monster_concept.png : concepto original
+- reference/uv_islands_guide.png     : guia visual de las islas
+- reference/texture_preview.jpg      : mosaico de vista previa
+- threejs/monsterMaterial.js          : material PBR de ejemplo para React/Vite/Three.js
+
+RESOLUCION
+- Mapas de texturas: 1024 x 1024 px, todos alineados entre si.
+- PNG; color sRGB solamente para albedo; otros mapas son datos lineales.
+
+PARA USAR EN TU JUEGO WEB (REACT + VITE + THREE.JS)
+1. Copia la carpeta 'textures' dentro de public/monster/textures/.
+2. Copia 'threejs/monsterMaterial.js' a src/.
+3. Instala three si no esta instalado: npm install three.
+4. Usa la funcion loadMonsterMaterial('/monster/textures').
+5. Carga un modelo 3D propio y asignale el material (ejemplo en el archivo JS).
+
+IMPORTANTE - LIMITACION DEL ATLAS
+La ilustracion original fue creada como hoja conceptual, NO como UV exportado
+por Blender desde una malla real. Estos mapas tienen la misma distribucion
+y sirven como punto de partida visual, pero NO encajaran por si solos en
+un modelo GLB cualquiera: el modelo tiene que tener coordenadas UV
+adaptadas especificamente a estas islas. El ZIP NO incluye modelo 3D,
+animaciones, esqueleto ni archivos .blend.
+
+Los mapas Normal, Roughness y AO son APROXIMACIONES calculadas a partir del
+albedo ilustrado, no capturas reales de geometria de alta resolucion.
+Para un monstruo profesional conviene modelarlo en Blender, desplegar
+UVs y hornear mapas desde esa malla.
+
+NOTAS
+- Usar normal_opengl en Three.js; no cargar normal_directx al mismo tiempo.
+- No activar transparencia con monster_uv_mask: ese archivo es una guia.
+- Si la textura sale boca abajo en un GLB de GLTFLoader, revisar flipY=false.
+- El uso directo depende de la topologia y UVs de tu modelo.

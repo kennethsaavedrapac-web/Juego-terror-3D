@@ -107,7 +107,9 @@ La nota del vigilante explica el traslado. Sus IDs, inventario y desbloqueo de s
 
 ## 7. THE WATCHER
 
-Modelo local sin descargas, de unos 2.85 m (1.7 veces la altura de ojos del jugador), piel mate oscura, cráneo sin rostro, torso encorvado, piernas largas y brazos con dedos casi hasta el suelo. Una geometría esférica de baja resolución compartida construye la silueta orgánica. Cabeza, brazos y piernas usan pivotes separados. Se encorva al acercarse a los marcos de 2.5 m. La marcha conserva fase y suaviza la amplitud; FROZEN conserva exactamente posición y pose.
+Modelo local sin descargas, de unos 2.85 m (1.7 veces la altura de ojos del jugador), piel mate grisácea deteriorada, cráneo con rasgos oscuros texturizados, torso encorvado, piernas largas y brazos con dedos casi hasta el suelo. Una geometría esférica de baja resolución compartida construye la silueta orgánica. Cabeza, brazos y piernas usan pivotes separados. Se encorva al acercarse a los marcos de 2.5 m. La marcha conserva fase y suaviza la amplitud; FROZEN conserva exactamente posición y pose.
+
+**Actualización de superficie:** mapas del paquete de texturas adaptados a las UV del modelo existente. Albedo sRGB, normal OpenGL y ORM compartido (AO/roughness/metallic=0), sin modificar geometría ni mecánicas. Detalles de generación y validación en `assets/monster/README.md`.
 
 **Estados:** PATROL recorre destinos cuando el jugador está lejos y todavía no tiene llaves; STALK se aproxima; CHASE se activa con dos llaves o con una a corta distancia; FROZEN tiene prioridad absoluta sobre movimiento y captura; ATTACK registra una única captura y detiene la partida. Pausa y lectura suspenden la IA, incluso en el fotograma que abre una nota.
 
