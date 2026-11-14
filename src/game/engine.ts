@@ -1,5 +1,5 @@
 import { createPhase4QA } from './phase4QA';
-import { Watcher } from './watcher';
+import { Watcher, resolveWatcherBodyCollision } from './watcher';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import type { CollectiblesSystem } from './collectibles';
@@ -10,7 +10,7 @@ import { InteractionSystem } from './interactions';
 import { InventoryManager } from './inventory';
 import { JumpscareSystem } from './jumpscares';
 import { buildAbandonedBuilding } from './level';
-import { clampDelta } from './physics';
+import { PLAYER_RADIUS, clampDelta, resolveCircleAABB } from './physics';
 import { FirstPersonController } from './player';
 import { SpatialAudioEngine } from './spatialAudio';
 import { SupernaturalEventsSystem } from './supernatural';
@@ -40,7 +40,8 @@ function detectSoftwareWebGL(): boolean {
 }
 
 const EMPTY_PROMPT: InteractPrompt = { visible: false, keyLabel: 'E', text: '' };
-const ATTACK_DURATION = 0.58;
+const CAUGHT_STAGE_DURATION = 0.22;
+const ATTACK_DURATION = 1.5;
 
 export class HorrorGameEngine {
   private container: HTMLElement;
@@ -81,6 +82,7 @@ export class HorrorGameEngine {
   private attackElapsed = 0;
   private cameraTrauma = 0;
   private growlTimer = 8;
+  private readonly prevPlayerPos = new THREE.Vector3(0, 0, 15.2);
 
   private disposeLevel = () => {};
   private disposeTextures = () => {};
@@ -111,6 +113,8 @@ export class HorrorGameEngine {
   private lastPromptVisible = false;
   private staminaBarEl: HTMLElement | null = null;
   private vignetteEl: HTMLElement | null = null;
+  private interferenceEl: HTMLElement | null = null;
+  private blackoutEl: HTMLElement | null = null;
 
   private readonly lookQuatTarget = new THREE.Quaternion();
   private readonly lookMatrix = new THREE.Matrix4();
@@ -131,8 +135,25 @@ export class HorrorGameEngine {
     this.vignetteEl = el;
   }
 
+  public setDeathOverlayElements(
+    interferenceEl: HTMLElement | null,
+    blackoutEl: HTMLElement | null,
+  ) {
+    this.interferenceEl = interferenceEl;
+    this.blackoutEl = blackoutEl;
+  }
+
   public setAccessibilitySettings(next: AccessibilitySettings) {
     this.settings = { ...next };
+  }
+
+  private updateDeathOverlayDom(interferenceOpacity: number, blackoutOpacity: number) {
+    if (this.interferenceEl) {
+      this.interferenceEl.style.opacity = interferenceOpacity.toFixed(3);
+    }
+    if (this.blackoutEl) {
+      this.blackoutEl.style.opacity = blackoutOpacity.toFixed(3);
+    }
   }
 
   private pushNotification(
@@ -159,6 +180,7 @@ export class HorrorGameEngine {
       this.attackElapsed = 0;
       this.cameraTrauma = 0;
       this.growlTimer = 8;
+      this.spatialAudio.stopDeathAmbience();
       this.watcher.reset();
       this.tension.reset();
       this.supernatural.reset();
@@ -170,36 +192,55 @@ export class HorrorGameEngine {
       this.activeNotification = null;
       this.notificationTimer = 0;
       this.controller.reset(this.spawnPosition, this.spawnYaw);
+      this.prevPlayerPos.copy(this.controller.position);
+      this.camera.fov = 70;
+      this.camera.updateProjectionMatrix();
       this.flashlight.reset(nextStatus === 'playing');
       this.updateStaminaDom(100, false);
       this.updateVignetteDom(0.08, false);
+      this.updateDeathOverlayDom(0, 0);
     }
 
     if (nextStatus === 'playing') {
+      this.spatialAudio.stopDeathAmbience();
       this.controller.setActive(!this.attackSequenceActive);
-      if (prevStatus === 'title' || resetRun) {
+      if (prevStatus === 'title' || prevStatus === 'restarting' || resetRun) {
         this.flashlight.reset(true);
         this.controller.update(0, this.camera, this.colliders);
+        this.prevPlayerPos.copy(this.controller.position);
+        this.scene.updateMatrixWorld(true);
+        this.renderer.render(this.scene, this.camera);
       }
       const prompt = this.interactions.evaluate(this.camera);
       this.broadcastHud(true, 'Recepción', prompt);
+    } else if (nextStatus === 'caught' || nextStatus === 'death_animation') {
+      this.controller.setActive(false);
     } else {
       this.controller.setActive(false);
-      this.spatialAudio.update({
-        dt: 0,
-        elapsed: this.elapsed,
-        active: false,
-        camera: this.camera,
-        watcherActive: false,
-        watcherPos: this.watcher.position,
-        watcherState: this.watcher.state,
-        tensionLevel: 1,
-        tensionIntensity: 0,
-        exhausted: false,
-        colliders: this.colliders,
-      });
+      if (nextStatus !== 'gameover') {
+        this.spatialAudio.stopDeathAmbience();
+        this.spatialAudio.update({
+          dt: 0,
+          elapsed: this.elapsed,
+          active: false,
+          camera: this.camera,
+          watcherActive: false,
+          watcherPos: this.watcher.position,
+          watcherState: this.watcher.state,
+          tensionLevel: 1,
+          tensionIntensity: 0,
+          exhausted: false,
+          colliders: this.colliders,
+        });
+      }
       if (nextStatus === 'title') {
         this.flashlight.reset(false);
+        this.updateDeathOverlayDom(0, 0);
+        if (resetRun) {
+          this.updateTitleCamera();
+          this.scene.updateMatrixWorld(true);
+          this.renderer.render(this.scene, this.camera);
+        }
       }
     }
   }
@@ -370,13 +411,24 @@ export class HorrorGameEngine {
       this.colliders,
       enemyOccluders,
       () => {
-        // Trigger dramatic 0.58s 3D attack lunge + scream before showing provisional capture screen
-        if (this.attackSequenceActive) return;
+        // Trigger 4-stage cinematic capture -> death_animation -> gameover (single trigger guard)
+        if (
+          this.attackSequenceActive ||
+          this.status === 'caught' ||
+          this.status === 'death_animation' ||
+          this.status === 'gameover'
+        ) {
+          return;
+        }
         this.attackSequenceActive = true;
         this.attackElapsed = 0;
+        this.status = 'caught';
         this.controller.setActive(false);
-        this.cameraTrauma = 0.85;
-        this.spatialAudio.playMonsterAttack();
+        this.interactions.clearActive();
+        this.cameraTrauma = 0.92;
+        this.watcher.animateAttack(0.05, 0.08, this.controller.position);
+        this.spatialAudio.playDeathSequenceAudio(this.settings.disableFlashes);
+        this.callbacks.onCaught();
         console.info('[Watcher] Ataque / Captura', {
           keys: this.inventory.getSnapshot().keysCollected,
         });
@@ -425,9 +477,11 @@ export class HorrorGameEngine {
       this.qa = createPhase4QA(
         (x, z, yaw, enemy) => {
           this.attackSequenceActive = false;
+          this.attackElapsed = 0;
           this.watcher.reset();
           this.controller.reset(new THREE.Vector3(x, 0, z), yaw);
           this.controller.update(0, this.camera, this.colliders);
+          this.prevPlayerPos.copy(this.controller.position);
           if (enemy) {
             this.watcher.active = true;
             this.watcher.model.root.visible = true;
@@ -644,131 +698,213 @@ export class HorrorGameEngine {
     if (this.status === 'title') {
       this.updateAtmosphere(dt, 0.08);
       this.updateTitleCamera();
-    } else if (this.status === 'playing') {
-      if (this.attackSequenceActive) {
-        // 0.58s animated 3D monster attack lunge + camera jolt before showing defeat modal
-        this.attackElapsed += dt;
-        const progress = Math.min(1, this.attackElapsed / ATTACK_DURATION);
+    } else if (this.status === 'caught' || this.status === 'death_animation') {
+      // 4-Stage Cinematic Death Sequence (1.50 s) — bounded real-time step keeps 1.5s snappy on software GL
+      const seqDt = Math.min(Math.max(rawDt, 0.008), 0.25);
+      this.attackElapsed += seqDt;
+      const progress = Math.min(1, this.attackElapsed / ATTACK_DURATION);
 
-        this.updateAtmosphere(dt, 1.0);
-        this.watcher.animateAttack(dt, progress, this.controller.position);
+      if (this.status === 'caught' && this.attackElapsed >= CAUGHT_STAGE_DURATION) {
+        this.status = 'death_animation';
+        this.callbacks.onDeathAnimation();
+      }
 
-        // Smoothly pull camera gaze onto the lunging creature's upper torso/head with controlled jolt
-        this.lookTargetVec.set(
-          this.watcher.position.x,
-          this.watcher.position.y + 2.25,
-          this.watcher.position.z,
-        );
-        this.lookMatrix.lookAt(this.camera.position, this.lookTargetVec, this.upVec);
-        this.lookQuatTarget.setFromRotationMatrix(this.lookMatrix);
-        this.camera.quaternion.slerp(this.lookQuatTarget, 1 - Math.exp(-16 * dt));
+      this.updateAtmosphere(seqDt, 1.0);
+      // Slight temporary visibility boost on monster face if player had flashlight off
+      if (!this.flashlight.isOn() && progress < 0.65) {
+        this.hemiLight.intensity = Math.max(this.hemiLight.intensity, 0.34);
+      }
 
-        if (!this.settings.reducedCameraMotion) {
-          this.camera.rotateZ(Math.sin(this.attackElapsed * 42) * 0.032 * (1 - progress * 0.5));
-        }
-        this.updateVignetteDom(1.0, true);
+      this.watcher.animateAttack(seqDt, progress, this.controller.position);
 
-        if (this.attackElapsed >= ATTACK_DURATION) {
-          this.attackSequenceActive = false;
-          this.setStatus('captured');
-          this.callbacks.onCapture();
-        }
-      } else {
-        const invSnap = this.inventory.getSnapshot();
-        const watcherDist = this.watcher.active
-          ? Math.hypot(
-              this.watcher.position.x - this.controller.position.x,
-              this.watcher.position.z - this.controller.position.z,
-            )
-          : 40;
-
-        const tensionSnap = this.tension.update({
-          dt,
-          watcherActive: this.watcher.active,
-          watcherDistance: watcherDist,
-          watcherState: this.watcher.state,
-          timeSinceLastSeen: this.watcher.timeSinceLastSeen,
-          keysCollected: invSnap.keysCollected,
-          isSprinting: this.controller.isSprinting,
-        });
-
-        this.updateAtmosphere(dt, tensionSnap.intensity);
-        this.collectibles.update(this.elapsed);
-
-        if (this.notificationTimer > 0) {
-          this.notificationTimer = Math.max(0, this.notificationTimer - dt);
-          if (this.notificationTimer === 0) {
-            this.activeNotification = null;
+      // Frame the 3D articulated creature cleanly in front of the camera without wall clipping
+      const dxCam = this.camera.position.x - this.watcher.position.x;
+      const dzCam = this.camera.position.z - this.watcher.position.z;
+      const distCam = Math.hypot(dxCam, dzCam);
+      const dirX = distCam > 1e-4 ? dxCam / distCam : 0;
+      const dirZ = distCam > 1e-4 ? dzCam / distCam : 1;
+      const idealDist = 1.24 + (1 - Math.min(1, progress * 1.4)) * 0.14;
+      let targetCamX = this.watcher.position.x + dirX * idealDist;
+      let targetCamZ = this.watcher.position.z + dirZ * idealDist;
+      for (let pass = 0; pass < 2; pass++) {
+        for (let i = 0; i < this.colliders.length; i++) {
+          const res = resolveCircleAABB(targetCamX, targetCamZ, PLAYER_RADIUS, this.colliders[i]);
+          if (res.collided) {
+            targetCamX = res.x;
+            targetCamZ = res.z;
           }
         }
+      }
+      const camDamp = 1 - Math.exp(-10 * seqDt);
+      this.camera.position.x = THREE.MathUtils.lerp(this.camera.position.x, targetCamX, camDamp);
+      this.camera.position.z = THREE.MathUtils.lerp(this.camera.position.z, targetCamZ, camDamp);
+      this.camera.position.y = THREE.MathUtils.lerp(
+        this.camera.position.y,
+        this.watcher.position.y + 1.72,
+        camDamp,
+      );
 
-        this.cameraTrauma = Math.max(0, this.cameraTrauma - dt * 1.4);
+      // Smoothly lock gaze onto the lunging creature's upper torso/head
+      this.lookTargetVec.set(
+        this.watcher.position.x,
+        this.watcher.position.y + 2.22,
+        this.watcher.position.z,
+      );
+      this.lookMatrix.lookAt(this.camera.position, this.lookTargetVec, this.upVec);
+      this.lookQuatTarget.setFromRotationMatrix(this.lookMatrix);
+      this.camera.quaternion.slerp(this.lookQuatTarget, 1 - Math.exp(-18 * seqDt));
 
-        const { zoneName } = this.controller.update(
+      const targetFov = this.settings.reducedCameraMotion ? 66 : 60;
+      if (Math.abs(this.camera.fov - targetFov) > 0.05) {
+        this.camera.fov = THREE.MathUtils.damp(this.camera.fov, targetFov, 9, seqDt);
+        this.camera.updateProjectionMatrix();
+      }
+
+      if (!this.settings.reducedCameraMotion) {
+        const shakeDecay = Math.max(0.15, 1 - progress * 0.85);
+        this.camera.rotateZ(Math.sin(this.attackElapsed * 44) * 0.042 * shakeDecay);
+      }
+
+      this.updateVignetteDom(1.0, true);
+
+      // Stage 4: brief interference static burst + progressive darkening to near-black
+      const interferenceOpacity =
+        progress > 0.42 && progress < 0.94
+          ? Math.sin(((progress - 0.42) / 0.52) * Math.PI) *
+            (this.settings.disableFlashes ? 0.14 : 0.54)
+          : 0;
+      const blackoutProgress = Math.max(0, Math.min(1, (progress - 0.54) / 0.42));
+      const blackoutOpacity = Math.pow(blackoutProgress, 1.3);
+      this.updateDeathOverlayDom(interferenceOpacity, blackoutOpacity);
+
+      if (this.attackElapsed >= ATTACK_DURATION) {
+        this.attackSequenceActive = false;
+        this.status = 'gameover';
+        this.updateDeathOverlayDom(0, 1);
+        this.spatialAudio.startDeathAmbience();
+        this.callbacks.onGameOver();
+      }
+    } else if (this.status === 'playing') {
+      const invSnap = this.inventory.getSnapshot();
+      const watcherDist = this.watcher.active
+        ? Math.hypot(
+            this.watcher.position.x - this.controller.position.x,
+            this.watcher.position.z - this.controller.position.z,
+          )
+        : 40;
+
+      const tensionSnap = this.tension.update({
+        dt,
+        watcherActive: this.watcher.active,
+        watcherDistance: watcherDist,
+        watcherState: this.watcher.state,
+        timeSinceLastSeen: this.watcher.timeSinceLastSeen,
+        keysCollected: invSnap.keysCollected,
+        isSprinting: this.controller.isSprinting,
+      });
+
+      this.updateAtmosphere(dt, tensionSnap.intensity);
+      this.collectibles.update(this.elapsed);
+
+      if (this.notificationTimer > 0) {
+        this.notificationTimer = Math.max(0, this.notificationTimer - dt);
+        if (this.notificationTimer === 0) {
+          this.activeNotification = null;
+        }
+      }
+
+      this.cameraTrauma = Math.max(0, this.cameraTrauma - dt * 1.4);
+      this.prevPlayerPos.copy(this.controller.position);
+
+      const { zoneName } = this.controller.update(
+        dt,
+        this.camera,
+        this.colliders,
+        {
+          reducedMotion: this.settings.reducedCameraMotion,
+          trauma: this.cameraTrauma,
+          chaseIntensity: tensionSnap.chaseActive ? tensionSnap.intensity : 0,
+          elapsed: this.elapsed,
+        },
+      );
+
+      if (this.watcher.active) {
+        const separated = resolveWatcherBodyCollision(
+          this.controller.position,
+          this.watcher.position,
+          this.watcher.active,
+          this.colliders,
+        );
+        if (
+          separated.x !== this.controller.position.x ||
+          separated.z !== this.controller.position.z
+        ) {
+          const dxSep = separated.x - this.controller.position.x;
+          const dzSep = separated.z - this.controller.position.z;
+          this.controller.position.x = separated.x;
+          this.controller.position.z = separated.z;
+          this.camera.position.x += dxSep;
+          this.camera.position.z += dzSep;
+        }
+      }
+
+      if (this.controller.consumeFlashlightPressed()) {
+        this.flashlight.toggle();
+      }
+      this.flashlight.update(dt);
+
+      // Update camera world matrix before raycasting for exact same-frame targeting
+      this.camera.updateMatrixWorld();
+      let prompt = this.interactions.evaluate(this.camera);
+
+      if (this.controller.consumeInteractPressed()) {
+        if (this.interactions.triggerActive()) {
+          prompt = this.interactions.evaluate(this.camera);
+        }
+      }
+
+      // Note opening must stop the enemy in this same frame.
+      this.doorSystem.update(
+        dt,
+        this.watcher.active
+          ? [this.controller.position, this.watcher.position]
+          : [this.controller.position],
+      );
+      this.scene.updateMatrixWorld(true);
+
+      if (this.status === 'playing') {
+        this.watcher.update(
           dt,
           this.camera,
-          this.colliders,
-          {
-            reducedMotion: this.settings.reducedCameraMotion,
-            trauma: this.cameraTrauma,
-            chaseIntensity: tensionSnap.chaseActive ? tensionSnap.intensity : 0,
-            elapsed: this.elapsed,
-          },
+          this.controller.position,
+          invSnap.keysCollected,
+          this.prevPlayerPos,
         );
 
-        if (this.controller.consumeFlashlightPressed()) {
-          this.flashlight.toggle();
-        }
-        this.flashlight.update(dt);
-
-        // Update camera world matrix before raycasting for exact same-frame targeting
-        this.camera.updateMatrixWorld();
-        let prompt = this.interactions.evaluate(this.camera);
-
-        if (this.controller.consumeInteractPressed()) {
-          if (this.interactions.triggerActive()) {
-            prompt = this.interactions.evaluate(this.camera);
-          }
-        }
-
-        // Note opening must stop the enemy in this same frame.
-        this.doorSystem.update(
-          dt,
-          this.watcher.active
-            ? [this.controller.position, this.watcher.position]
-            : [this.controller.position],
-        );
-        this.scene.updateMatrixWorld(true);
-
-        if (this.status === 'playing') {
-          this.watcher.update(
-            dt,
-            this.camera,
-            this.controller.position,
-            invSnap.keysCollected,
-          );
-
-          // Occasional monster growls while active and unseen / pursuing
-          if (
-            this.watcher.active &&
-            this.watcher.state !== 'FROZEN' &&
-            this.watcher.state !== 'ATTACK'
-          ) {
-            this.growlTimer -= dt;
-            if (this.growlTimer <= 0) {
-              this.growlTimer = this.watcher.state === 'CHASE' ? 7 + Math.random() * 5 : 11 + Math.random() * 8;
-              if (watcherDist < 22) {
-                this.spatialAudio.playMonsterGrowl(
-                  this.watcher.position,
-                  this.controller.position,
-                  this.colliders,
-                  this.watcher.state === 'CHASE',
-                );
-              }
+        // Occasional monster growls while active and pursuing / nearby
+        if (
+          this.status === 'playing' &&
+          this.watcher.active &&
+          this.watcher.state !== 'FROZEN' &&
+          this.watcher.state !== 'ATTACK'
+        ) {
+          this.growlTimer -= dt;
+          if (this.growlTimer <= 0) {
+            this.growlTimer =
+              this.watcher.state === 'CHASE' ? 5.5 + Math.random() * 4 : 10 + Math.random() * 7;
+            if (watcherDist < 22) {
+              this.spatialAudio.playMonsterGrowl(
+                this.watcher.position,
+                this.controller.position,
+                this.colliders,
+                this.watcher.state === 'CHASE',
+              );
             }
           }
+        }
 
-          // Supernatural Events & Controlled Jumpscares
+        // Supernatural Events & Controlled Jumpscares (skip if capture just started)
+        if (this.status === 'playing') {
           this.supernatural.update({
             dt,
             active: !this.attackSequenceActive,
@@ -820,7 +956,9 @@ export class HorrorGameEngine {
 
           this.updateVignetteDom(tensionSnap.intensity, false);
         }
+      }
 
+      if (this.status === 'playing') {
         this.updateStaminaDom(
           this.controller.stamina.value,
           this.controller.stamina.exhausted,
@@ -829,15 +967,17 @@ export class HorrorGameEngine {
       }
     }
 
-    this.renderer.render(this.scene, this.camera);
-    this.qa?.update(
-      rawDt,
-      this.watcher.active ? this.watcher.state : 'INACTIVO',
-      this.watcher.position.x,
-      this.watcher.position.z,
-      this.renderer.info.render.calls,
-      this.renderer.info.render.triangles,
-    );
+    if (this.status !== 'gameover') {
+      this.renderer.render(this.scene, this.camera);
+      this.qa?.update(
+        rawDt,
+        this.watcher.active ? this.watcher.state : 'INACTIVO',
+        this.watcher.position.x,
+        this.watcher.position.z,
+        this.renderer.info.render.calls,
+        this.renderer.info.render.triangles,
+      );
+    }
 
     if (this.isSoftwareGl) {
       this.afterDraw(this.tick);

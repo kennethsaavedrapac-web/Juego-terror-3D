@@ -83,6 +83,13 @@ export class SpatialAudioEngine {
   private playerBreathTimer = 0;
   private distantNoiseTimer = 8;
 
+  // Death Screen dark ambient drone
+  private deathDroneOsc: OscillatorNode | null = null;
+  private deathDroneGain: GainNode | null = null;
+  private deathNoiseSrc: AudioBufferSourceNode | null = null;
+  private deathNoiseGain: GainNode | null = null;
+  private deathSeqTimers: number[] = [];
+
   private activeVoices = 0;
   private readonly maxVoices = 8;
   private lastGrowlAt = -10;
@@ -571,21 +578,41 @@ export class SpatialAudioEngine {
     );
   }
 
+  public fadeOutGameplayLoops() {
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    this.ambientHumGain?.gain.setTargetAtTime(0.0, now, 0.14);
+    this.tensionDroneGain?.gain.setTargetAtTime(0.0, now, 0.12);
+    this.chasePulseGain?.gain.setTargetAtTime(0.0, now, 0.1);
+    this.monsterBreathGain?.gain.setTargetAtTime(0.0, now, 0.1);
+    this.monsterDroneGain?.gain.setTargetAtTime(0.0, now, 0.1);
+  }
+
+  public clearDeathSequenceTimers() {
+    for (const id of this.deathSeqTimers) {
+      window.clearTimeout(id);
+    }
+    this.deathSeqTimers = [];
+  }
+
   public playMonsterAttack() {
     if (!this.ensureInitialized() || !this.ctx || !this.masterGain) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
-    const dur = 0.72;
+    const dur = 0.85;
     this.trackVoice(dur);
 
-    // Dissonant shriek + sub impact
-    for (const freq of [135, 198, 415]) {
+    this.masterGain.gain.setTargetAtTime(0.95, now, 0.03);
+    this.fadeOutGameplayLoops();
+
+    // Heavy low impact + dissonant metallic shriek
+    for (const freq of [64, 138, 212, 435]) {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      osc.type = freq > 300 ? 'sawtooth' : 'triangle';
+      osc.type = freq > 300 ? 'sawtooth' : freq < 90 ? 'sine' : 'triangle';
       osc.frequency.setValueAtTime(freq, now);
-      osc.frequency.exponentialRampToValueAtTime(freq * 0.48, now + dur);
-      gain.gain.setValueAtTime(0.18, now);
+      osc.frequency.exponentialRampToValueAtTime(Math.max(24, freq * 0.44), now + dur);
+      gain.gain.setValueAtTime(freq < 90 ? 0.34 : 0.18, now);
       gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
       osc.connect(gain);
       gain.connect(this.masterGain);
@@ -598,11 +625,11 @@ export class SpatialAudioEngine {
       burst.buffer = this.noiseBuffer;
       const filter = ctx.createBiquadFilter();
       filter.type = 'bandpass';
-      filter.frequency.setValueAtTime(1150, now);
-      filter.frequency.exponentialRampToValueAtTime(240, now + dur);
-      filter.Q.value = 1.4;
+      filter.frequency.setValueAtTime(1250, now);
+      filter.frequency.exponentialRampToValueAtTime(210, now + dur);
+      filter.Q.value = 1.3;
       const gain = ctx.createGain();
-      gain.gain.setValueAtTime(0.28, now);
+      gain.gain.setValueAtTime(0.3, now);
       gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
       burst.connect(filter);
       filter.connect(gain);
@@ -610,6 +637,129 @@ export class SpatialAudioEngine {
       burst.start(now);
       burst.stop(now + dur);
     }
+  }
+
+  /** Synchronized multi-stage audio for the 1.5s Phase 6 death animation sequence. */
+  public playDeathSequenceAudio(disableFlashes = false) {
+    this.clearDeathSequenceTimers();
+    this.playMonsterAttack();
+    if (!this.ensureInitialized() || !this.ctx || !this.masterGain) return;
+
+    // Stage 3/4 interference static crackle (~0.72s)
+    const tStatic = window.setTimeout(() => {
+      if (this.disposed || !this.ctx || !this.masterGain || !this.noiseBuffer) return;
+      const ctx = this.ctx;
+      const now = ctx.currentTime;
+      const dur = 0.55;
+      const src = ctx.createBufferSource();
+      src.buffer = this.noiseBuffer;
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.setValueAtTime(disableFlashes ? 650 : 1850, now);
+      bp.frequency.exponentialRampToValueAtTime(340, now + dur);
+      bp.Q.value = 1.6;
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.001, now);
+      gain.gain.linearRampToValueAtTime(disableFlashes ? 0.08 : 0.16, now + 0.04);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+      src.connect(bp);
+      bp.connect(gain);
+      gain.connect(this.masterGain);
+      src.start(now);
+      src.stop(now + dur + 0.02);
+    }, 720);
+
+    // Stage 4 deep blackout boom (~1.15s)
+    const tDrop = window.setTimeout(() => {
+      if (this.disposed || !this.ctx || !this.masterGain) return;
+      const ctx = this.ctx;
+      const now = ctx.currentTime;
+      const dur = 0.65;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(76, now);
+      osc.frequency.exponentialRampToValueAtTime(24, now + dur);
+      gain.gain.setValueAtTime(0.001, now);
+      gain.gain.linearRampToValueAtTime(0.26, now + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + dur + 0.03);
+    }, 1120);
+
+    this.deathSeqTimers.push(tStatic, tDrop);
+  }
+
+  public startDeathAmbience() {
+    if (!this.ensureInitialized() || !this.ctx || !this.masterGain) return;
+    this.stopDeathAmbience();
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    this.masterGain.gain.setTargetAtTime(0.85, now, 0.25);
+    this.fadeOutGameplayLoops();
+
+    try {
+      const osc = ctx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(37, now);
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 110;
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.001, now);
+      gain.gain.linearRampToValueAtTime(0.075, now + 0.8);
+      osc.connect(lp);
+      lp.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(now);
+      this.deathDroneOsc = osc;
+      this.deathDroneGain = gain;
+
+      if (this.noiseBuffer) {
+        const src = ctx.createBufferSource();
+        src.buffer = this.noiseBuffer;
+        src.loop = true;
+        const bp = ctx.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.frequency.value = 320;
+        bp.Q.value = 2.4;
+        const ng = ctx.createGain();
+        ng.gain.setValueAtTime(0.001, now);
+        ng.gain.linearRampToValueAtTime(0.03, now + 1.0);
+        src.connect(bp);
+        bp.connect(ng);
+        ng.connect(this.masterGain);
+        src.start(now);
+        this.deathNoiseSrc = src;
+        this.deathNoiseGain = ng;
+      }
+    } catch {
+      // Ignore audio failures in restricted headless contexts
+    }
+  }
+
+  public stopDeathAmbience() {
+    this.clearDeathSequenceTimers();
+    const stopNode = (n: AudioScheduledSourceNode | null) => {
+      if (!n) return;
+      try {
+        n.stop();
+        n.disconnect();
+      } catch {
+        // Ignore already stopped nodes
+      }
+    };
+    stopNode(this.deathDroneOsc);
+    stopNode(this.deathNoiseSrc);
+    this.deathDroneGain?.disconnect();
+    this.deathNoiseGain?.disconnect();
+    this.deathDroneOsc = null;
+    this.deathDroneGain = null;
+    this.deathNoiseSrc = null;
+    this.deathNoiseGain = null;
   }
 
   public playSpatialKnock(
@@ -850,6 +1000,7 @@ export class SpatialAudioEngine {
 
   public dispose() {
     this.disposed = true;
+    this.stopDeathAmbience();
     const stopNode = (n: AudioScheduledSourceNode | null) => {
       if (!n) return;
       try {

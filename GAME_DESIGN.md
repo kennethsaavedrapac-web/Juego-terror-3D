@@ -20,12 +20,13 @@
 ```text
 src/
 ├── main.tsx                    # Punto de entrada React/DOM
-├── App.tsx                     # Orquestación de estados ('title' | 'playing' | 'paused' | 'reading' | 'captured')
+├── App.tsx                     # Orquestación de estados ('title' | 'playing' | 'paused' | 'reading' | 'caught' | 'death_animation' | 'gameover' | 'restarting')
 ├── components/
 │   ├── TitleScreen.tsx         # Pantalla inicial atmosférica con emblema SVG y controles
 │   ├── GameHud.tsx             # HUD minimalista (ubicación, objetivo, llaves 0/3, linterna [F], retícula, prompt [E], avisos, resistencia)
 │   ├── NoteModal.tsx           # Modal legible para lectura de notas con cierre por Esc / E / botón
-│   └── PauseModal.tsx          # Menú de pausa (Esc / P)
+│   ├── PauseModal.tsx          # Menú de pausa (Esc / P)
+│   └── DeathScreen.tsx         # Pantalla definitiva de derrota cinematográfica ('NO DEBISTE ACERCARTE.')
 └── game/
     ├── types.ts                # Tipos de estado, habitaciones, puertas, llaves, notas, examinables y HUD
     ├── mapData.ts              # Representación lógica del edificio (16 áreas, circuitos laterales y sótano, muros, puertas, props, 3 llaves, 3 notas y 3 examinables)
@@ -42,12 +43,12 @@ src/
     ├── level.ts                # Ensamblaje del edificio 3D, iluminación estratégica, oclusores y coleccionables
     ├── player.ts               # Controlador FPS (PointerLock + fallback, WASD, Shift, F, E, damping, trauma/comfort)
     ├── watcherModel.ts         # Rig articulado completo (caderas, torso, cuello, cabeza, hombros, codos, manos, dedos, rodillas, pies)
-    ├── watcher.ts              # IA de THE WATCHER, giro progresivo, detección visual, reubicación oculta y ataque
+    ├── watcher.ts              # IA de THE WATCHER, alcance letal continuo de 360°, giro progresivo, detección visual, reubicación oculta y ataque
     ├── tension.ts              # Sistema de tensión dinámica de 4 niveles (sin barra en HUD)
-    ├── spatialAudio.ts         # Audio posicional 3D Web Audio HRTF con atenuación por paredes
+    ├── spatialAudio.ts         # Audio posicional 3D Web Audio HRTF, secuencia de muerte sincronizada y drone de Game Over
     ├── supernatural.ts         # Eventos sobrenaturales (puertas, golpes, luces, susurros, silencio, aparición)
     ├── jumpscares.ts           # Sustos ambientales, silueta 3D en penumbra y reacción al ataque
-    └── engine.ts               # Ciclo Three.js, RoomEnvironment, niebla dinámica, polvo por ala, audio y bucle delta
+    └── engine.ts               # Ciclo Three.js, secuencia cinematográfica de muerte en 4 etapas, niebla dinámica, polvo y bucle delta
 ```
 
 ---
@@ -100,6 +101,18 @@ El mapa está diseñado con un pasillo principal largo y **dos rutas secundarias
 - [x] **Sustos controlados (`jumpscares.ts`)**: Susto ambiental, silueta 3D en penumbra que desaparece al dejar de mirarla y susto del monstruo al capturar, con enfriamiento estricto y bloqueo total durante la lectura de notas.
 - [x] **Mejoras visuales y accesibilidad (`PauseModal.tsx`)**: Niebla y oscurecimiento dinámicos, partículas de polvo por ala/sótano y opciones persistentes para **Reducir movimiento de cámara** y **Desactivar destellos ambientales**.
 
+### Implementado — Fase 6 (Agresividad, Alcance Letal y Muerte Cinematográfica)
+- [x] **Zona de alcance letal de 360° (`watcher.ts`)**: Comprobación continua (`isInsideLethalReach`) sobre el segmento de desplazamiento del jugador (`prevPlayer -> curPlayer`) dentro de un radio físico real de **1.65 m** (acorde al radio del jugador `0.42 m`, cuerpo del monstruo `0.46 m` y alcance de brazos largos). Impide atravesar al monstruo o pasar junto a él al esprintar; las paredes, pilares y puertas cerradas bloquean estrictamente cualquier ataque.
+- [x] **Mirar no da invencibilidad (`watcher.ts`)**: Observar a THE WATCHER a distancia segura (`> 1.65 m`) lo congela al instante (`FROZEN`). Entrar en su alcance físico real (`<= 1.65 m`) desencadena `ATTACK` inmediatamente incluso si el jugador lo está mirando.
+- [x] **Separación física corporal (`resolveWatcherBodyCollision`)**: Evita que el jugador atraviese limpiamente el torso de la criatura sin contacto físico.
+- [x] **Mayor agresividad y respuesta (`WATCHER_DIFFICULTY`)**: Persecución `CHASE` automática dentro de los `5.0 m` de radio de peligro, velocidades progresivas (`1.15` → `2.95 m/s`, con repuntes de hasta `3.32 m/s` a corta distancia, por debajo del esprint y caminar del jugador), replanificación rápida al perder contacto visual y recuperación ágil ante obstáculos.
+- [x] **Secuencia cinematográfica de muerte en 4 etapas (`1.50 s`, `engine.ts` + `watcherModel.ts` + `spatialAudio.ts`)**:
+  1. Captura única (`caught`) con bloqueo total de controles, liberación del puntero e impacto sonoro inmediato.
+  2. Animación 3D articulada con giro rápido hacia la víctima, inclinación agresiva del torso, extensión de brazos y cierre de garras hacia la cámara.
+  3. Encuadre cercano de cámara libre de muros, cierre dramático de FOV e impacto controlado respetando *Reducir movimiento de cámara*.
+  4. Interferencia breve (`interferenceRef`) y oscurecimiento progresivo a negro (`blackoutRef`) sincronizados con estática y caída subgrave antes de pasar a `gameover`.
+- [x] **Pantalla original de derrota (`DeathScreen.tsx`)**: Fondo casi negro con viñeta carmesí y líneas de escaneo sutiles, texto **`NO DEBISTE ACERCARTE.`** / **`LA PRÓXIMA VEZ, MANTÉN TU DISTANCIA.`**, ambiente sonoro oscuro y botones **`REINTENTAR`** y **`MENÚ PRINCIPAL`** con reinicio íntegro sin fugas ni instancias duplicadas.
+
 ## 6. Mapa ampliado
 
 Las ocho áreas originales se conservan. Las nuevas alas amplían el ancho de 26 a 54 metros; el edificio llega hasta Z=-32. Se mantienen los circuitos originales y se añaden:
@@ -126,7 +139,7 @@ Modelo local sin descargas, de unos 2.85 m (1.7 veces la altura de ojos del juga
 
 **Actualización de superficie:** mapas del paquete de texturas adaptados a las UV del modelo existente. Albedo sRGB, normal OpenGL y ORM compartido (AO/roughness/metallic=0), sin modificar proporciones ni identidad visual. Detalles de generación y validación en `assets/monster/README.md`.
 
-**Estados:** PATROL recorre destinos cuando el jugador está lejos y todavía no tiene llaves; STALK se aproxima; CHASE se activa con dos llaves o con una a corta distancia; FROZEN tiene prioridad absoluta sobre movimiento y captura; ATTACK ejecuta una secuencia breve de ataque antes de registrar la captura única. Pausa y lectura suspenden la IA y los sustos, incluso en el fotograma que abre una nota.
+**Estados:** PATROL recorre destinos cuando el jugador está lejos y todavía no tiene llaves; STALK se aproxima; CHASE se activa dentro de `5.0 m`, con dos llaves o con una a menos de `12 m`; FROZEN tiene prioridad sobre movimiento a distancia segura (`> 1.65 m`), pero **no otorga invencibilidad dentro del alcance físico letal (`<= 1.65 m`)**; ATTACK ejecuta la secuencia cinematográfica de `1.50 s` antes de mostrar `DeathScreen`. Pausa y lectura suspenden la IA y los sustos, incluso en el fotograma que abre una nota.
 
 **Mirada:** se prueban cabeza, torso, hombros y piernas contra la zona central de la cámara (86% del semiancho, 92% del semialto). Cada punto visible requiere raycasting libre contra geometría real de muros, dinteles, muebles, columnas, suelo, escalera y hojas móviles. No depende de la linterna. Una cabeza expuesta por encima de un mueble puede congelarlo; una pared que oculta todo el cuerpo no. Las matrices se actualizan antes de cada comprobación.
 
@@ -134,12 +147,12 @@ Modelo local sin descargas, de unos 2.85 m (1.7 veces la altura de ojos del juga
 
 | Llaves | Velocidad de aproximación (m/s) | Intervalo de ruta (s) |
 | --- | --- | --- |
-| 0 | 0.85 | 1.50 |
-| 1 | 1.20 | 1.10 |
-| 2 | 1.65 | 0.70 |
-| 3 | 2.15 | 0.45 |
+| 0 | 1.15 | 1.15 |
+| 1 | 1.65 | 0.80 |
+| 2 | 2.35 | 0.48 |
+| 3 | 2.95 | 0.28 |
 
-PATROL usa el 70% de esa velocidad. La máxima sigue por debajo de caminar (3.4 m/s). Distancia de captura: 0.85 m, mismo nivel de apoyo y segmento sin obstáculos, siempre después de comprobar la mirada.
+PATROL usa el 72% de esa velocidad. La velocidad base máxima (`2.95 m/s`) y el empuje de peligro (`<= 3.32 m/s`) siguen por debajo de caminar (`3.4 m/s`) y esprintar (`5.6 m/s`). Alcance letal de captura continua: **1.65 m** en 360°, mismo nivel de apoyo y segmento libre de muros, pilares o puertas cerradas, comprobado antes de congelar por mirada.
 
 ## 8. Navegación, puertas y coste
 
@@ -153,16 +166,16 @@ Las hojas abiertas conservan una caja física calculada desde su transformación
 
 Se mantienen seis luces puntuales, redistribuidas entre las alas, y la linterna. No se añadieron dependencias de producción. El audio 3D es 100% procedural Web Audio con presupuesto de voces y sin descargas externas susceptibles de 404.
 
-## 9. Validación de Fases 4 y 5
+## 9. Validación de Fases 4, 5 y 6
 
 Comandos: `npm test`, `npm run lint`, `npm run build`.
 
-La suite automatizada (`physics.test.ts`, `watcher.test.ts`, `watcherSurface.test.ts`, `phase5.test.ts`) comprueba:
+La suite automatizada (`physics.test.ts`, `watcher.test.ts`, `watcherSurface.test.ts`, `phase5.test.ts`, `phase6.test.ts`) comprueba:
 - BFS del perímetro y accesibilidad de las 16 áreas; rutas a las tres llaves.
 - A* sin penetración, puertas cerradas, hojas realmente abiertas y protección del barrido sobre ocupantes.
 - Persecución simulada por ambas alas y descenso/ascenso del sótano, sin atravesar paredes ni muebles.
-- Mirada lejana, oclusión total/parcial, congelación inmediata, prioridad de congelación sobre captura y reinicio.
-- Jerarquía articulada completa, poses diferenciadas (`IDLE`, `WALK`, `RUN`, `FROZEN`, `ATTACK`), sincronización de pisadas, consistencia a 30/120 FPS, giro progresivo, reubicación oculta, atenuación acústica por paredes, niveles de tensión 1–4, seguridad de portazos sobrenaturales y bloqueo de sustos durante lectura de notas.
+- Mirada lejana (`> 1.65 m`) que congela al instante, oclusión total/parcial y alcance letal continuo de 360° (`<= 1.65 m`) que ataca incluso al ser mirado, sin atravesar muros ni puertas cerradas, ni permitir túneles al esprintar.
+- Jerarquía articulada completa, poses diferenciadas (`IDLE`, `WALK`, `RUN`, `FROZEN`, `ATTACK`), extensión y cierre de garras en ataque, sincronización de pisadas, consistencia a 30/120 FPS, giro progresivo, reubicación oculta, atenuación acústica por paredes, niveles de tensión 1–4, seguridad de portazos sobrenaturales, bloqueo de sustos durante lectura de notas y reinicios consecutivos limpios.
 
 **Verificación manual recomendada en navegador y hardware objetivo:**
 - Percepción subjetiva de espacialidad HRTF con auriculares (izquierda/derecha/detrás y atenuación tras muros).
@@ -171,8 +184,8 @@ La suite automatizada (`physics.test.ts`, `watcher.test.ts`, `watcherSurface.tes
 
 ## 10. Pendiente para fases posteriores
 
-- Pantalla de derrota definitiva, estadísticas de partida y flujo final de reinicio/menú.
 - Secuencia completa de victoria al cruzar la puerta principal de salida.
+- Estadísticas de partida en la pantalla de derrota/victoria.
 - Sistema de guardado / selector de dificultad o ajustes de volumen de audio.
 - Calibración fina de ritmo y dificultad tras pruebas de juego completas con humanos.
 

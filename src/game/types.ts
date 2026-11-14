@@ -1,4 +1,12 @@
-export type GameStatus = 'title' | 'playing' | 'paused' | 'reading' | 'captured';
+export type GameStatus =
+  | 'title'
+  | 'playing'
+  | 'paused'
+  | 'reading'
+  | 'caught'
+  | 'death_animation'
+  | 'gameover'
+  | 'restarting';
 
 export interface AABBCollider {
   id: string;
@@ -163,7 +171,9 @@ export interface AccessibilitySettings {
 }
 
 export interface GameEngineCallbacks {
-  onCapture: () => void;
+  onCaught: () => void;
+  onDeathAnimation: () => void;
+  onGameOver: () => void;
   onHudUpdate: (snapshot: HudSnapshot) => void;
   onOpenNote: (note: ActiveNoteData) => void;
   onPauseRequest: () => void;

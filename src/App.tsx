@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { DeathScreen } from './components/DeathScreen';
 import { GameHud } from './components/GameHud';
 import { NoteModal } from './components/NoteModal';
 import { PauseModal } from './components/PauseModal';
@@ -59,6 +60,8 @@ export default function App() {
   const canvasMountRef = useRef<HTMLDivElement | null>(null);
   const staminaFillRef = useRef<HTMLDivElement | null>(null);
   const vignetteRef = useRef<HTMLDivElement | null>(null);
+  const interferenceRef = useRef<HTMLDivElement | null>(null);
+  const blackoutRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<HorrorGameEngine | null>(null);
   const statusRef = useRef<GameStatus>(status);
 
@@ -67,6 +70,10 @@ export default function App() {
     document.body.dataset.state = status;
     engineRef.current?.setStaminaBarElement(staminaFillRef.current);
     engineRef.current?.setVignetteElement(vignetteRef.current);
+    engineRef.current?.setDeathOverlayElements(
+      interferenceRef.current,
+      blackoutRef.current,
+    );
     engineRef.current?.setStatus(status, false);
   }, [status]);
 
@@ -87,14 +94,27 @@ export default function App() {
     document.body.dataset.state = statusRef.current;
 
     const engine = new HorrorGameEngine(mountEl, {
-      onCapture: () => {
-        statusRef.current = 'captured';
-        setStatus('captured');
+      onCaught: () => {
+        setActiveNote(null);
+        statusRef.current = 'caught';
+        document.body.dataset.state = 'caught';
+        setStatus('caught');
+      },
+      onDeathAnimation: () => {
+        statusRef.current = 'death_animation';
+        document.body.dataset.state = 'death_animation';
+        setStatus('death_animation');
+      },
+      onGameOver: () => {
+        statusRef.current = 'gameover';
+        document.body.dataset.state = 'gameover';
+        setStatus('gameover');
       },
       onHudUpdate: (snapshot) => {
         setHud(snapshot);
       },
       onOpenNote: (note) => {
+        if (statusRef.current !== 'playing') return;
         setActiveNote(note);
         setStatus('reading');
       },
@@ -110,6 +130,7 @@ export default function App() {
 
     engine.setStaminaBarElement(staminaFillRef.current);
     engine.setVignetteElement(vignetteRef.current);
+    engine.setDeathOverlayElements(interferenceRef.current, blackoutRef.current);
     engine.setAccessibilitySettings(settings);
     engine.setStatus(statusRef.current, statusRef.current === 'playing');
     engineRef.current = engine;
@@ -158,14 +179,21 @@ export default function App() {
       document.activeElement.blur();
     }
     setActiveNote(null);
-    document.body.dataset.state = 'playing';
+    statusRef.current = 'restarting';
+    document.body.dataset.state = 'restarting';
     engineRef.current?.setStatus('playing', true);
     engineRef.current?.requestPointerLock();
+    statusRef.current = 'playing';
+    document.body.dataset.state = 'playing';
     setStatus('playing');
   }, []);
 
   const handleReturnToTitle = useCallback(() => {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
     setActiveNote(null);
+    statusRef.current = 'title';
     document.body.dataset.state = 'title';
     engineRef.current?.setStatus('title', true);
     setStatus('title');
@@ -190,6 +218,15 @@ export default function App() {
         return;
       }
 
+      if (
+        statusRef.current === 'caught' ||
+        statusRef.current === 'death_animation' ||
+        statusRef.current === 'gameover' ||
+        statusRef.current === 'restarting'
+      ) {
+        return;
+      }
+
       if (e.code === 'KeyP' || e.code === 'Escape') {
         if (statusRef.current === 'playing') {
           e.preventDefault();
@@ -205,6 +242,9 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [handleCloseNote, handleResume, handleStart]);
 
+  const showDeathOverlays =
+    status === 'caught' || status === 'death_animation' || status === 'gameover';
+
   return (
     <div className="relative h-full w-full overflow-hidden bg-[#06070a]">
       {/* Dedicated isolated WebGL canvas container */}
@@ -214,8 +254,29 @@ export default function App() {
         aria-label="Escenario 3D del edificio abandonado"
       />
 
+      {/* Stage 4 cinematic interference & progressive blackout overlays */}
+      <div
+        ref={interferenceRef}
+        aria-hidden="true"
+        className={`pointer-events-none fixed inset-0 z-30 opacity-0 ${
+          showDeathOverlays ? 'block' : 'hidden'
+        } ${settings.disableFlashes ? '' : 'animate-[deathStaticShift_0.16s_steps(2)_infinite]'}`}
+        style={{
+          backgroundImage:
+            'repeating-linear-gradient(0deg, rgba(220,210,205,0.16) 0px, rgba(220,210,205,0.16) 1px, rgba(16,8,10,0.28) 1px, rgba(16,8,10,0.28) 3px)',
+          mixBlendMode: 'screen',
+        }}
+      />
+      <div
+        ref={blackoutRef}
+        aria-hidden="true"
+        className={`pointer-events-none fixed inset-0 z-40 bg-[#030305] opacity-0 ${
+          showDeathOverlays ? 'block' : 'hidden'
+        }`}
+      />
+
       {webglError && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#06070a] p-6 text-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#06070a] p-6 text-center">
           <div className="max-w-md border border-white/15 bg-[#0d1016] p-8">
             <h2 className="font-display text-xl font-bold text-[#ece8e0]">
               Error de gráficos 3D
@@ -242,36 +303,12 @@ export default function App() {
         <NoteModal note={activeNote} onClose={handleCloseNote} />
       )}
 
-      {status === 'captured' && !webglError && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="capture-title"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-6 text-center animate-[fadeIn_.6s_ease-out]"
-        >
-          <div className="max-w-md border border-white/15 bg-[#0d1016] p-8 text-[#ece8e0]">
-            <p className="text-xs tracking-[.3em] text-red-400">THE WATCHER</p>
-            <h2 id="capture-title" className="mt-4 text-2xl">
-              Te ha alcanzado.
-            </h2>
-            <p className="my-6 text-sm text-stone-400">
-              Míralo para detenerlo. Las paredes y las puertas cerradas interrumpen tu mirada.
-            </p>
-            <button
-              autoFocus
-              className="border border-white/30 px-6 py-3 hover:bg-white/10"
-              onClick={handleRestart}
-            >
-              Reiniciar partida
-            </button>
-            <button
-              className="mt-4 block w-full text-sm text-stone-400"
-              onClick={handleReturnToTitle}
-            >
-              Volver al inicio
-            </button>
-          </div>
-        </div>
+      {status === 'gameover' && !webglError && (
+        <DeathScreen
+          disableFlashes={settings.disableFlashes}
+          onRetry={handleRestart}
+          onMainMenu={handleReturnToTitle}
+        />
       )}
 
       {status === 'paused' && !webglError && (

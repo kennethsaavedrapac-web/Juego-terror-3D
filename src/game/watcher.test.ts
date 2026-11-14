@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { BUILDING_DOORS, BUILDING_KEYS, BUILDING_ROOMS, buildStaticColliders, getDoorClosedCollider } from './mapData';
 import { floorHeightAt } from './expansion';
 import { NavigationGraph, clearSegment } from './navigation';
-import { Watcher, WatcherVision, WATCHER_DIFFICULTY } from './watcher';
+import { Watcher, WatcherVision, WATCHER_DIFFICULTY, WATCHER_LETHAL_REACH } from './watcher';
 import { createDoorSystem } from './doors';
 import type { BuildingTextures } from './textures';
 
@@ -71,23 +71,26 @@ test('vision freezes a distant and partially exposed body; walls, doors, rear an
   mesh.geometry.dispose(); (mesh.material as THREE.Material).dispose();
 });
 
-test('watching wins over capture at every key tier, fast turns freeze immediately, reset clears capture',()=>{
+test('watching freezes at safe distance across key tiers; physical reach captures once and reset clears capture',()=>{
   let captures=0;
   const enemy=new Watcher(colliders,[],()=>captures++,()=>{});
-  const camera=cameraAt(0,1.68,5,0,1.7,4.3);
-  enemy.active=true; enemy.position.set(0,0,4.3);
+  // Safe distance (3.2m > WATCHER_LETHAL_REACH): watching freezes monster at all key tiers
+  const camera=cameraAt(0,1.68,5,0,1.7,1.8);
+  enemy.active=true; enemy.position.set(0,0,1.8);
   for(let keys=0;keys<=3;keys++) {
     const before=enemy.position.clone();
     enemy.update(.05,camera,{x:0,z:5},keys);
     assert.equal(enemy.state,'FROZEN'); assert.ok(enemy.position.equals(before));
   }
   assert.equal(captures,0);
-  camera.lookAt(0,1.7,20); camera.updateMatrixWorld(true);
+  // Entering lethal physical reach triggers ATTACK exactly once (even while watched)
+  enemy.position.set(0,0,4.2);
   enemy.update(.05,camera,{x:0,z:5},3);
   assert.equal(captures,1); assert.equal(enemy.state,'ATTACK');
   enemy.update(.05,camera,{x:0,z:5},3); assert.equal(captures,1);
   enemy.reset(); assert.equal(enemy.active,false); assert.equal(enemy.state,'PATROL');
   enemy.active=true; enemy.position.set(0,0,-8);
+  camera.lookAt(0,1.7,20); camera.updateMatrixWorld(true);
   enemy.update(.05,camera,{x:0,z:5},3); assert.ok(enemy.position.z>-8);
   camera.lookAt(enemy.position.x,1.8,enemy.position.z); camera.updateMatrixWorld(true);
   const before=enemy.position.clone(); enemy.update(.05,camera,{x:0,z:5},3);
@@ -98,7 +101,7 @@ test('enemy actually walks a multi-room pursuit, around furniture and down/up th
   const enemy=new Watcher(colliders,[],()=>{},()=>{}); enemy.active=true; enemy.position.set(0,0,14);
   for(const target of [{x:15,z:4},{x:24,z:-6},{x:20,z:-25},{x:-20,z:-8},{x:0,z:-19}]) {
     let frames=0;
-    while(Math.hypot(enemy.position.x-target.x,enemy.position.z-target.z)>1.1 && frames++<9000) {
+    while(Math.hypot(enemy.position.x-target.x,enemy.position.z-target.z)>WATCHER_LETHAL_REACH+0.15 && frames++<9000) {
       const dx=target.x-enemy.position.x,dz=target.z-enemy.position.z;
       const camera=cameraAt(target.x,floorHeightAt(target.x,target.z)+1.68,target.z,target.x+dx,1.68,target.z+dz);
       const before={x:enemy.position.x,z:enemy.position.z};

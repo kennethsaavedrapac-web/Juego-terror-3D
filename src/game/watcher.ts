@@ -1,20 +1,108 @@
 import * as THREE from 'three';
 import { floorHeightAt } from './expansion';
 import { NavigationGraph, clearSegment, type NavPoint } from './navigation';
+import { PLAYER_RADIUS, isLineOfSightBlocked, resolveCircleAABB } from './physics';
 import { createWatcherModel } from './watcherModel';
 import type { AABBCollider, WatcherAnimState } from './types';
 
 export type WatcherState = 'PATROL' | 'STALK' | 'FROZEN' | 'CHASE' | 'ATTACK';
+
+/**
+ * Calibrated physical distances in world meters:
+ * - Player radius: 0.42 m, Watcher radius: 0.46 m (body contact ~0.88 m)
+ * - Monster height: 2.85 m with long reaching arms (~1.5 m arm span)
+ */
+export const WATCHER_LETHAL_REACH = 1.65;
+export const WATCHER_DANGER_RADIUS = 5.0;
+export const WATCHER_BODY_RADIUS = 0.92;
+
 export const WATCHER_DIFFICULTY = [
-  { speed: 0.85, repath: 1.5 },
-  { speed: 1.2, repath: 1.1 },
-  { speed: 1.65, repath: 0.7 },
-  { speed: 2.15, repath: 0.45 },
+  { speed: 1.15, repath: 1.15 },
+  { speed: 1.65, repath: 0.8 },
+  { speed: 2.35, repath: 0.48 },
+  { speed: 2.95, repath: 0.28 },
 ] as const;
 
 function dampAngle(current: number, target: number, lambda: number, dt: number): number {
   const diff = Math.atan2(Math.sin(target - current), Math.cos(target - current));
   return current + diff * (1 - Math.exp(-lambda * dt));
+}
+
+/**
+ * Continuous (swept-segment) 360-degree lethal reach check.
+ * Prevents high sprint speed or momentary FPS dips from tunneling past the monster,
+ * while strictly blocking attacks through walls, pillars, or closed doors.
+ */
+export function isInsideLethalReach(
+  watcherPos: { x: number; y: number; z: number },
+  prevPlayer: NavPoint,
+  curPlayer: NavPoint,
+  colliders: readonly AABBCollider[],
+  reach: number = WATCHER_LETHAL_REACH,
+): boolean {
+  const vx = curPlayer.x - prevPlayer.x;
+  const vz = curPlayer.z - prevPlayer.z;
+  const lenSq = vx * vx + vz * vz;
+  const t =
+    lenSq > 1e-8
+      ? Math.max(
+          0,
+          Math.min(
+            1,
+            ((watcherPos.x - prevPlayer.x) * vx + (watcherPos.z - prevPlayer.z) * vz) / lenSq,
+          ),
+        )
+      : 0;
+  const cx = prevPlayer.x + vx * t;
+  const cz = prevPlayer.z + vz * t;
+
+  const dist = Math.hypot(watcherPos.x - cx, watcherPos.z - cz);
+  if (dist > reach) return false;
+
+  if (Math.abs(watcherPos.y - floorHeightAt(cx, cz)) >= 0.75) return false;
+
+  return !isLineOfSightBlocked(watcherPos.x, watcherPos.z, cx, cz, colliders);
+}
+
+/**
+ * Physical separation between player and monster body so the player cannot
+ * ghost cleanly through the creature's solid torso if an attack hasn't locked yet.
+ */
+export function resolveWatcherBodyCollision(
+  playerPos: NavPoint,
+  watcherPos: { x: number; y: number; z: number },
+  watcherActive: boolean,
+  colliders: readonly AABBCollider[],
+  minSeparation: number = WATCHER_BODY_RADIUS,
+): NavPoint {
+  if (!watcherActive) return playerPos;
+  if (Math.abs(watcherPos.y - floorHeightAt(playerPos.x, playerPos.z)) >= 0.75) {
+    return playerPos;
+  }
+  if (isLineOfSightBlocked(watcherPos.x, watcherPos.z, playerPos.x, playerPos.z, colliders)) {
+    return playerPos;
+  }
+
+  const dx = playerPos.x - watcherPos.x;
+  const dz = playerPos.z - watcherPos.z;
+  const dist = Math.hypot(dx, dz);
+  if (dist >= minSeparation) return playerPos;
+
+  const nx = dist > 1e-5 ? dx / dist : 0;
+  const nz = dist > 1e-5 ? dz / dist : 1;
+  let px = watcherPos.x + nx * minSeparation;
+  let pz = watcherPos.z + nz * minSeparation;
+
+  for (let pass = 0; pass < 2; pass++) {
+    for (let i = 0; i < colliders.length; i++) {
+      const res = resolveCircleAABB(px, pz, PLAYER_RADIUS, colliders[i]);
+      if (res.collided) {
+        px = res.x;
+        pz = res.z;
+      }
+    }
+  }
+  return { x: px, z: pz };
 }
 
 /** Several real body samples prevent a small occluder hiding a visible head/shoulder. */
@@ -157,7 +245,7 @@ export class Watcher {
       this.position.copy(candidatePos);
       this.model.root.rotation.y = Math.atan2(p.x - player.x, p.z - player.z);
       this.route = path;
-      this.routeTimer = 0.6;
+      this.routeTimer = 0.4;
       this.stuckTimer = 0;
       return true;
     }
@@ -168,16 +256,22 @@ export class Watcher {
     const dx = playerPos.x - this.position.x;
     const dz = playerPos.z - this.position.z;
     const targetYaw = Math.atan2(-dx, -dz);
-    this.model.root.rotation.y = dampAngle(this.model.root.rotation.y, targetYaw, 18, dt);
+    this.model.root.rotation.y = dampAngle(this.model.root.rotation.y, targetYaw, 24, dt);
     this.model.animate(dt, 0, false, false, {
       animState: 'ATTACK',
       attackProgress: progress,
       lookYawOffset: 0,
-      lookPitchOffset: -0.1,
+      lookPitchOffset: -0.06,
     });
   }
 
-  update(dt: number, camera: THREE.PerspectiveCamera, player: NavPoint, keys: number) {
+  update(
+    dt: number,
+    camera: THREE.PerspectiveCamera,
+    player: NavPoint,
+    keys: number,
+    prevPlayer: NavPoint = player,
+  ) {
     this.age += dt;
     if (!this.active) {
       if (this.age < 18 || (this.spawnTimer -= dt) > 0) return;
@@ -201,6 +295,17 @@ export class Watcher {
 
     if (this.state === 'ATTACK') return;
 
+    // Rule: Entering the creature's physical lethal reach triggers an attack from ANY direction,
+    // even if observed directly, unless blocked by a wall or closed door.
+    if (isInsideLethalReach(this.position, prevPlayer, player, this.colliders)) {
+      this.introduced = true;
+      this.setState('ATTACK');
+      this.currentSpeed = 0;
+      this.onCapture();
+      return;
+    }
+
+    // Outside physical reach, direct observation freezes the monster immediately.
     if (this.vision.visible(camera, this.position)) {
       this.setState('FROZEN');
       this.timeSinceLastSeen = 0;
@@ -216,26 +321,15 @@ export class Watcher {
       return;
     }
 
+    const wasFrozen = this.state === 'FROZEN';
     this.timeSinceLastSeen += dt;
     const distance = Math.hypot(this.position.x - player.x, this.position.z - player.z);
 
-    // Observation always wins over proximity, including the most aggressive tier.
-    if (
-      distance < 0.85 &&
-      Math.abs(this.position.y - floorHeightAt(player.x, player.z)) < 0.65 &&
-      clearSegment(this.position, player, this.colliders, 0)
-    ) {
-      this.setState('ATTACK');
-      this.currentSpeed = 0;
-      this.onCapture();
-      return;
-    }
-
     const difficulty = WATCHER_DIFFICULTY[Math.max(0, Math.min(3, keys))];
     const nextState: WatcherState =
-      keys >= 2 || (keys > 0 && distance < 9)
+      distance <= WATCHER_DANGER_RADIUS || keys >= 2 || (keys > 0 && distance < 12)
         ? 'CHASE'
-        : distance < 26 || keys > 0
+        : distance < 28 || keys > 0
           ? 'STALK'
           : 'PATROL';
     this.setState(nextState);
@@ -249,16 +343,21 @@ export class Watcher {
       }
     }
 
+    if (wasFrozen) {
+      this.routeTimer = Math.min(this.routeTimer, 0);
+    }
+
     this.routeTimer -= dt;
     if (this.routeTimer <= 0) {
       this.route = this.graph.findPath(this.position, target);
-      this.routeTimer = difficulty.repath;
+      this.routeTimer = distance <= WATCHER_DANGER_RADIUS ? Math.min(difficulty.repath, 0.25) : difficulty.repath;
       if (!this.route.length && this.state === 'PATROL') {
         this.patrolIndex = (this.patrolIndex + 1) % PATROL.length;
       }
     }
 
-    const speed = difficulty.speed * (this.state === 'PATROL' ? 0.7 : 1);
+    const dangerSurge = distance <= WATCHER_DANGER_RADIUS && this.state !== 'PATROL' ? 1.14 : 1.0;
+    const speed = Math.min(3.32, difficulty.speed * (this.state === 'PATROL' ? 0.72 : dangerSurge));
     let budget = speed * Math.min(dt, 0.05);
     let moved = 0;
     let targetYaw = this.model.root.rotation.y;
@@ -285,8 +384,8 @@ export class Watcher {
       budget -= step;
     }
 
-    // Progressive turning instead of instant rotation snapping
-    const turnRate = this.state === 'CHASE' ? 11 : 7.5;
+    // Turn swiftly toward target when pursuing closely, smoothly when patrolling/stalking
+    const turnRate = distance <= WATCHER_DANGER_RADIUS ? 16 : this.state === 'CHASE' ? 13 : 8.5;
     this.model.root.rotation.y = dampAngle(this.model.root.rotation.y, targetYaw, turnRate, dt);
 
     const actualSpeed = dt > 1e-5 ? moved / dt : 0;
@@ -294,7 +393,7 @@ export class Watcher {
 
     if (actualSpeed < 0.08 && this.route.length > 0) {
       this.stuckTimer += dt;
-      if (this.stuckTimer > 1.0) {
+      if (this.stuckTimer > 0.35) {
         this.route = [];
         this.routeTimer = 0;
         this.stuckTimer = 0;
