@@ -40,8 +40,14 @@ src/
     ├── doors.ts                # Sistema reutilizable de puertas batientes con bisagras y puerta doble de salida desbloqueable
     ├── props.ts                # Constructor de mobiliario y objetos abandonados compartiendo geometrías/materiales
     ├── level.ts                # Ensamblaje del edificio 3D, iluminación estratégica, oclusores y coleccionables
-    ├── player.ts               # Controlador FPS (PointerLock + fallback, WASD, Shift, F, E, damping)
-    └── engine.ts               # Ciclo Three.js, RoomEnvironment, niebla, polvo ambiental, notificaciones y bucle delta
+    ├── player.ts               # Controlador FPS (PointerLock + fallback, WASD, Shift, F, E, damping, trauma/comfort)
+    ├── watcherModel.ts         # Rig articulado completo (caderas, torso, cuello, cabeza, hombros, codos, manos, dedos, rodillas, pies)
+    ├── watcher.ts              # IA de THE WATCHER, giro progresivo, detección visual, reubicación oculta y ataque
+    ├── tension.ts              # Sistema de tensión dinámica de 4 niveles (sin barra en HUD)
+    ├── spatialAudio.ts         # Audio posicional 3D Web Audio HRTF con atenuación por paredes
+    ├── supernatural.ts         # Eventos sobrenaturales (puertas, golpes, luces, susurros, silencio, aparición)
+    ├── jumpscares.ts           # Sustos ambientales, silueta 3D en penumbra y reacción al ataque
+    └── engine.ts               # Ciclo Three.js, RoomEnvironment, niebla dinámica, polvo por ala, audio y bucle delta
 ```
 
 ---
@@ -85,6 +91,15 @@ El mapa está diseñado con un pasillo principal largo y **dos rutas secundarias
 - [x] A* sobre grafo de suelo, puertas dinámicas, oclusión real y progresión con las llaves.
 - [x] Captura provisional con movimiento detenido y reinicio completo.
 
+### Implementado — Fase 5 (Terror Psicológico, Animaciones Articuladas y Audio 3D)
+- [x] **Rig articulado de THE WATCHER (`watcherModel.ts`)**: Jerarquía completa con pivotes para caderas/pelvis, torso, cuello, cabeza, hombros, brazos, codos, manos, dedos individuales, muslos, rodillas y pies con alineación al suelo.
+- [x] **Estados y transiciones suaves (`IDLE`, `WALK`, `RUN`, `FROZEN`, `ATTACK`)**: Respiración y tics inquietantes en inactividad; marcha asimétrica sincronizada por distancia; carrera agresiva con inclinación del torso y seguimiento sutil de cabeza; congelación instantánea al ser observado (sin desplazamiento ni pasos); secuencia breve de ataque (`0.58 s`) con extensión de brazos, sonido aterrador y reacción de cámara antes de la pantalla provisional de captura.
+- [x] **Audio 3D espacial (`spatialAudio.ts`)**: `PannerNode` HRTF conectado al `AudioListener` de cámara con atenuación paso bajo según paredes/puertas cerradas intermedias (`computeWallAttenuation`). Incluye pasos lentos/rápidos sincronizados a la pisada, respiración distorsionada, gruñidos ocasionales, crujido articular, zumbido grave de proximidad, golpes, portazos, susurros y respiración agitada del jugador.
+- [x] **Tensión dinámica invisible (`tension.ts`)**: Cálculo continuo en 4 niveles internos (`1: Calma inquietante`, `2: Sospecha`, `3: Peligro`, `4: Persecución`) con histéresis y transiciones suaves en audio, niebla y viñeta periférica.
+- [x] **Eventos sobrenaturales (`supernatural.ts`)**: Portazos seguros sin bloquear ni atravesar actores, golpes espaciales en paredes, fallos eléctricos en luminarias (no estroboscópicos), susurros posicionales, silencio repentino y reubicación controlada fuera de vista sobre ruta A* válida.
+- [x] **Sustos controlados (`jumpscares.ts`)**: Susto ambiental, silueta 3D en penumbra que desaparece al dejar de mirarla y susto del monstruo al capturar, con enfriamiento estricto y bloqueo total durante la lectura de notas.
+- [x] **Mejoras visuales y accesibilidad (`PauseModal.tsx`)**: Niebla y oscurecimiento dinámicos, partículas de polvo por ala/sótano y opciones persistentes para **Reducir movimiento de cámara** y **Desactivar destellos ambientales**.
+
 ## 6. Mapa ampliado
 
 Las ocho áreas originales se conservan. Las nuevas alas amplían el ancho de 26 a 54 metros; el edificio llega hasta Z=-32. Se mantienen los circuitos originales y se añaden:
@@ -107,15 +122,15 @@ La nota del vigilante explica el traslado. Sus IDs, inventario y desbloqueo de s
 
 ## 7. THE WATCHER
 
-Modelo local sin descargas, de unos 2.85 m (1.7 veces la altura de ojos del jugador), piel mate grisácea deteriorada, cráneo con rasgos oscuros texturizados, torso encorvado, piernas largas y brazos con dedos casi hasta el suelo. Una geometría esférica de baja resolución compartida construye la silueta orgánica. Cabeza, brazos y piernas usan pivotes separados. Se encorva al acercarse a los marcos de 2.5 m. La marcha conserva fase y suaviza la amplitud; FROZEN conserva exactamente posición y pose.
+Modelo local sin descargas, de unos 2.85 m (1.7 veces la altura de ojos del jugador), piel mate grisácea deteriorada, cráneo con rasgos oscuros texturizados, torso encorvado, piernas largas y brazos con dedos casi hasta el suelo. Una geometría esférica de baja resolución compartida construye la silueta orgánica. En Fase 5 se reestructura en una jerarquía articulada completa (caderas, torso, cuello, cabeza, hombros, codos, manos, dedos, muslos, rodillas y pies) conservando las UV del atlas existente. Se encorva al acercarse a los marcos de 2.5 m y mantiene los pies alineados con el suelo.
 
-**Actualización de superficie:** mapas del paquete de texturas adaptados a las UV del modelo existente. Albedo sRGB, normal OpenGL y ORM compartido (AO/roughness/metallic=0), sin modificar geometría ni mecánicas. Detalles de generación y validación en `assets/monster/README.md`.
+**Actualización de superficie:** mapas del paquete de texturas adaptados a las UV del modelo existente. Albedo sRGB, normal OpenGL y ORM compartido (AO/roughness/metallic=0), sin modificar proporciones ni identidad visual. Detalles de generación y validación en `assets/monster/README.md`.
 
-**Estados:** PATROL recorre destinos cuando el jugador está lejos y todavía no tiene llaves; STALK se aproxima; CHASE se activa con dos llaves o con una a corta distancia; FROZEN tiene prioridad absoluta sobre movimiento y captura; ATTACK registra una única captura y detiene la partida. Pausa y lectura suspenden la IA, incluso en el fotograma que abre una nota.
+**Estados:** PATROL recorre destinos cuando el jugador está lejos y todavía no tiene llaves; STALK se aproxima; CHASE se activa con dos llaves o con una a corta distancia; FROZEN tiene prioridad absoluta sobre movimiento y captura; ATTACK ejecuta una secuencia breve de ataque antes de registrar la captura única. Pausa y lectura suspenden la IA y los sustos, incluso en el fotograma que abre una nota.
 
-**Mirada:** se prueban cabeza, torso, hombros y piernas contra la zona central de la cámara (86% del semiancho, 92% del semialto). Cada punto visible requiere raycasting libre contra geometría real de muros, dinteles, muebles, columnas, suelo, escalera y hojas móviles. No depende de la linterna. Una cabeza expuesta por encima de un mueble puede congelarlo; una pared que oculta todo el cuerpo no. Las matrices se actualizan antes de cada comprobación. No se reduce la frecuencia de la mirada, solo la búsqueda de rutas.
+**Mirada:** se prueban cabeza, torso, hombros y piernas contra la zona central de la cámara (86% del semiancho, 92% del semialto). Cada punto visible requiere raycasting libre contra geometría real de muros, dinteles, muebles, columnas, suelo, escalera y hojas móviles. No depende de la linterna. Una cabeza expuesta por encima de un mueble puede congelarlo; una pared que oculta todo el cuerpo no. Las matrices se actualizan antes de cada comprobación.
 
-**Introducción:** mínimo 18 segundos de juego activo. Se elige entre cinco posiciones válidas a más de 14 m, fuera de la vista y con ruta posible hacia el jugador. Si todas están visibles o aisladas, la aparición espera. No se vuelve a teletransportar. El corredor central ofrece el primer encuentro a distancia; al observarlo aparece un aviso breve con la regla.
+**Introducción:** mínimo 18 segundos de juego activo. Se elige entre cinco posiciones válidas a más de 14 m, fuera de la vista y con ruta posible hacia el jugador. Si todas están visibles o aisladas, la aparición espera.
 
 | Llaves | Velocidad de aproximación (m/s) | Intervalo de ruta (s) |
 | --- | --- | --- |
@@ -131,35 +146,33 @@ PATROL usa el 70% de esa velocidad. La máxima sigue por debajo de caminar (3.4 
 - `expansion.ts`: habitaciones, obstáculos adicionales y altura compartida del suelo.
 - `expansionVisuals.ts`: mobiliario clínico, generador, escaleras y señales. Cajas agrupadas por material con InstancedMesh.
 - `navigation.ts`: grafo estático de puntos cada 0.5 m, ocho vecinos, A* con heap y radio conservador de 0.46 m. Segmentos contra cajas expandidas impiden cortar esquinas.
-- `watcher.ts`: estados, aparición, dificultad, captura y visión multipunto.
-- `watcherModel.ts`: modelo, animación y liberación de recursos.
+- `watcher.ts` y `watcherModel.ts`: rig articulado, transiciones suaves, giro progresivo, recuperación ante bloqueos, detección visual y reubicación oculta.
 - `phase4QA.ts`: panel de inspección solo en desarrollo; no se monta en producción.
 
-Las hojas abiertas conservan una caja física calculada desde su transformación. El paso permanece bloqueado hasta una apertura suficiente (1.25 rad). La animación no barre sobre jugador ni enemigo; cerrar un acceso ocupado espera. Si cambia una puerta, el enemigo verifica cada avance contra los colliders actuales, invalida la ruta bloqueada y vuelve a buscar. Puede esperar ante una zona cerrada; no abre ni atraviesa puertas.
+Las hojas abiertas conservan una caja física calculada desde su transformación. El paso permanece bloqueado hasta una apertura suficiente (1.25 rad). La animación no barre sobre jugador ni enemigo; cerrar un acceso ocupado (tanto por jugador como por eventos sobrenaturales) espera.
 
-Se mantienen seis luces puntuales, redistribuidas entre las alas, y la linterna. No se añadieron dependencias de producción. La búsqueda se ejecuta a intervalos; la detección visual descarta puntos fuera de pantalla antes de lanzar rayos. El movimiento conserva subpasos y límite de delta. Texturas, geometrías, instancias y materiales se liberan al desmontar.
+Se mantienen seis luces puntuales, redistribuidas entre las alas, y la linterna. No se añadieron dependencias de producción. El audio 3D es 100% procedural Web Audio con presupuesto de voces y sin descargas externas susceptibles de 404.
 
-## 9. Validación de Fase 4
+## 9. Validación de Fases 4 y 5
 
-Comandos: `bun install --frozen-lockfile`, `npm test`, `npm run lint`, `npm run build`. Se usa Bun 1.4.4 para respetar el lockfile existente.
+Comandos: `npm test`, `npm run lint`, `npm run build`.
 
-La suite automatizada comprueba:
+La suite automatizada (`physics.test.ts`, `watcher.test.ts`, `watcherSurface.test.ts`, `phase5.test.ts`) comprueba:
 - BFS del perímetro y accesibilidad de las 16 áreas; rutas a las tres llaves.
 - A* sin penetración, puertas cerradas, hojas realmente abiertas y protección del barrido sobre ocupantes.
 - Persecución simulada por ambas alas y descenso/ascenso del sótano, sin atravesar paredes ni muebles.
-- Objetivo pegado a una pared, evitando que el mayor radio del enemigo lo deje bloqueado.
-- Mirada lejana, oclusión total/parcial, cámara de espaldas o hacia arriba, giro inmediato y prioridad de congelación sobre captura con 0–3 llaves.
-- Aparición diferida, animación y congelación de pose, captura única y reinicio, además de las pruebas previas de movimiento, stamina e inventario.
+- Mirada lejana, oclusión total/parcial, congelación inmediata, prioridad de congelación sobre captura y reinicio.
+- Jerarquía articulada completa, poses diferenciadas (`IDLE`, `WALK`, `RUN`, `FROZEN`, `ATTACK`), sincronización de pisadas, consistencia a 30/120 FPS, giro progresivo, reubicación oculta, atenuación acústica por paredes, niveles de tensión 1–4, seguridad de portazos sobrenaturales y bloqueo de sustos durante lectura de notas.
 
-Inspección en navegador local: inicio, silueta, clínica, oficinas, escalera, sótano, captura y reinicio. La consola no mostró errores de ejecución. Lecturas observadas en este entorno: alrededor de 59–60 FPS; no equivalen a una garantía para todos los equipos sin GPU dedicada.
-
-Para repetir la inspección, iniciar `npm run dev` y abrir `http://127.0.0.1:3000/?autostart=1&qa=1`. El panel permite saltar entre zonas y preparar un encuentro reproducible; muestra FPS, draw calls, triángulos, estado y coordenadas. “Girar 180°” permite contrastar FROZEN y STALK sin usar el ratón. La partida normal no muestra este panel.
-
-**Prueba manual restante de aceptación y equilibrio:** completar una partida normal recogiendo las tres llaves, abrir/cerrar puertas durante la huida, leer una nota con el enemigo cerca y comprobar que pausa, probar F y Shift, regresar a la salida y reiniciar tras captura. Repetir durante varios minutos en el equipo de menor capacidad previsto y comprobar fluidez, legibilidad en esquinas y comodidad del control con ratón. La simulación valida recorridos, pero no sustituye esta valoración de dificultad ni la medición en hardware objetivo.
+**Verificación manual recomendada en navegador y hardware objetivo:**
+- Percepción subjetiva de espacialidad HRTF con auriculares (izquierda/derecha/detrás y atenuación tras muros).
+- Equilibrio de tensión y frecuencia real de eventos sobrenaturales durante una partida completa recogiendo las tres llaves y escapando.
+- Fluidez sostenida en equipos sin GPU dedicada.
 
 ## 10. Pendiente para fases posteriores
 
-- Jumpscare, secuencia de muerte y pantalla de derrota definitivos.
-- Secuencia completa de victoria al cruzar la salida (se conserva el desbloqueo provisional).
-- Efectos psicológicos avanzados, ambiente sonoro completo, respiración y latidos.
-- Ajuste de dificultad a partir de partidas humanas y mediciones en equipos sin GPU dedicada.
+- Pantalla de derrota definitiva, estadísticas de partida y flujo final de reinicio/menú.
+- Secuencia completa de victoria al cruzar la puerta principal de salida.
+- Sistema de guardado / selector de dificultad o ajustes de volumen de audio.
+- Calibración fina de ritmo y dificultad tras pruebas de juego completas con humanos.
+

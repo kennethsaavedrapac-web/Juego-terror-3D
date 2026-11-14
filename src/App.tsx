@@ -5,11 +5,32 @@ import { PauseModal } from './components/PauseModal';
 import { TitleScreen } from './components/TitleScreen';
 import { HorrorGameEngine } from './game/engine';
 import { TOTAL_KEYS } from './game/mapData';
-import type { ActiveNoteData, GameStatus, HudSnapshot } from './game/types';
+import type {
+  AccessibilitySettings,
+  ActiveNoteData,
+  GameStatus,
+  HudSnapshot,
+} from './game/types';
+
+const SETTINGS_STORAGE_KEY = 'dlb_accessibility_v1';
 
 function shouldAutostart(): boolean {
   if (typeof window === 'undefined') return false;
   return new URLSearchParams(window.location.search).get('autostart') === '1';
+}
+
+function loadAccessibilitySettings(): AccessibilitySettings {
+  try {
+    const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+    if (!raw) return { reducedCameraMotion: false, disableFlashes: false };
+    const parsed = JSON.parse(raw) as Partial<AccessibilitySettings>;
+    return {
+      reducedCameraMotion: Boolean(parsed.reducedCameraMotion),
+      disableFlashes: Boolean(parsed.disableFlashes),
+    };
+  } catch {
+    return { reducedCameraMotion: false, disableFlashes: false };
+  }
 }
 
 export default function App() {
@@ -17,6 +38,7 @@ export default function App() {
   const [status, setStatus] = useState<GameStatus>(
     initialAutostart ? 'playing' : 'title',
   );
+  const [settings, setSettings] = useState<AccessibilitySettings>(loadAccessibilitySettings);
   const [activeNote, setActiveNote] = useState<ActiveNoteData | null>(null);
   const [webglError, setWebglError] = useState<string | null>(null);
   const [hud, setHud] = useState<HudSnapshot>({
@@ -36,6 +58,7 @@ export default function App() {
 
   const canvasMountRef = useRef<HTMLDivElement | null>(null);
   const staminaFillRef = useRef<HTMLDivElement | null>(null);
+  const vignetteRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<HorrorGameEngine | null>(null);
   const statusRef = useRef<GameStatus>(status);
 
@@ -43,8 +66,18 @@ export default function App() {
     statusRef.current = status;
     document.body.dataset.state = status;
     engineRef.current?.setStaminaBarElement(staminaFillRef.current);
+    engineRef.current?.setVignetteElement(vignetteRef.current);
     engineRef.current?.setStatus(status, false);
   }, [status]);
+
+  useEffect(() => {
+    engineRef.current?.setAccessibilitySettings(settings);
+    try {
+      localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    } catch {
+      // Ignore storage failures in restricted contexts
+    }
+  }, [settings]);
 
   // Mount Three.js WebGLRenderer once outside HUD re-renders
   useEffect(() => {
@@ -54,7 +87,10 @@ export default function App() {
     document.body.dataset.state = statusRef.current;
 
     const engine = new HorrorGameEngine(mountEl, {
-      onCapture: () => { statusRef.current = 'captured'; setStatus('captured'); },
+      onCapture: () => {
+        statusRef.current = 'captured';
+        setStatus('captured');
+      },
       onHudUpdate: (snapshot) => {
         setHud(snapshot);
       },
@@ -73,6 +109,8 @@ export default function App() {
     });
 
     engine.setStaminaBarElement(staminaFillRef.current);
+    engine.setVignetteElement(vignetteRef.current);
+    engine.setAccessibilitySettings(settings);
     engine.setStatus(statusRef.current, statusRef.current === 'playing');
     engineRef.current = engine;
 
@@ -195,6 +233,7 @@ export default function App() {
         <GameHud
           hud={hud}
           staminaFillRef={staminaFillRef}
+          vignetteRef={vignetteRef}
           onPause={() => setStatus('paused')}
         />
       )}
@@ -204,19 +243,41 @@ export default function App() {
       )}
 
       {status === 'captured' && !webglError && (
-        <div role="dialog" aria-modal="true" aria-labelledby="capture-title" className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-6 text-center animate-[fadeIn_.6s_ease-out]">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="capture-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-6 text-center animate-[fadeIn_.6s_ease-out]"
+        >
           <div className="max-w-md border border-white/15 bg-[#0d1016] p-8 text-[#ece8e0]">
             <p className="text-xs tracking-[.3em] text-red-400">THE WATCHER</p>
-            <h2 id="capture-title" className="mt-4 text-2xl">Te ha alcanzado.</h2>
-            <p className="my-6 text-sm text-stone-400">Míralo para detenerlo. Las paredes y las puertas cerradas interrumpen tu mirada.</p>
-            <button autoFocus className="border border-white/30 px-6 py-3 hover:bg-white/10" onClick={handleRestart}>Reiniciar partida</button>
-            <button className="mt-4 block w-full text-sm text-stone-400" onClick={handleReturnToTitle}>Volver al inicio</button>
+            <h2 id="capture-title" className="mt-4 text-2xl">
+              Te ha alcanzado.
+            </h2>
+            <p className="my-6 text-sm text-stone-400">
+              Míralo para detenerlo. Las paredes y las puertas cerradas interrumpen tu mirada.
+            </p>
+            <button
+              autoFocus
+              className="border border-white/30 px-6 py-3 hover:bg-white/10"
+              onClick={handleRestart}
+            >
+              Reiniciar partida
+            </button>
+            <button
+              className="mt-4 block w-full text-sm text-stone-400"
+              onClick={handleReturnToTitle}
+            >
+              Volver al inicio
+            </button>
           </div>
         </div>
       )}
 
       {status === 'paused' && !webglError && (
         <PauseModal
+          settings={settings}
+          onUpdateSettings={setSettings}
           onResume={handleResume}
           onRestart={handleRestart}
           onReturnToTitle={handleReturnToTitle}

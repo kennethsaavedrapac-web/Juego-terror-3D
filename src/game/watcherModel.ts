@@ -1,52 +1,534 @@
 import * as THREE from 'three';
-import { createWatcherSurface, mapWatcherGeometry } from './watcherSurface';
+import { mapWatcherGeometry, createWatcherSurface } from './watcherSurface';
 import type { WatcherSurface } from './watcherAtlas';
+import type { WatcherAnimState } from './types';
+
+export interface WatcherAnimateOptions {
+  animState?: WatcherAnimState;
+  lookYawOffset?: number;
+  lookPitchOffset?: number;
+  attackProgress?: number; // 0..1
+  allowFrozenMicroBreath?: boolean;
+  onFootstep?: (intensity: number, isRunning: boolean) => void;
+}
+
+export interface WatcherJointRig {
+  hips: THREE.Group;
+  torso: THREE.Group;
+  neck: THREE.Group;
+  head: THREE.Group;
+  shoulders: [THREE.Group, THREE.Group];
+  upperArms: [THREE.Group, THREE.Group];
+  elbows: [THREE.Group, THREE.Group];
+  hands: [THREE.Group, THREE.Group];
+  fingers: [THREE.Group[], THREE.Group[]];
+  hipsLegs: [THREE.Group, THREE.Group];
+  knees: [THREE.Group, THREE.Group];
+  feet: [THREE.Group, THREE.Group];
+}
 
 export function createWatcherModel() {
-  const root = new THREE.Group(); root.name = 'THE WATCHER';
-  const body = new THREE.Group(); root.add(body);
+  const root = new THREE.Group();
+  root.name = 'THE WATCHER';
+
   const surface = createWatcherSurface();
   const sphere = new THREE.SphereGeometry(1, 10, 7);
   const geometries = new Map<WatcherSurface, THREE.SphereGeometry>();
-  const part = (parent: THREE.Object3D, x: number,y: number,z: number,sx: number,sy: number,sz: number, region: WatcherSurface = 'torso') => {
+
+  const part = (
+    parent: THREE.Object3D,
+    x: number,
+    y: number,
+    z: number,
+    sx: number,
+    sy: number,
+    sz: number,
+    region: WatcherSurface = 'torso',
+  ) => {
     let geometry = geometries.get(region);
-    if (!geometry) { geometry = mapWatcherGeometry(sphere, region); geometries.set(region, geometry); }
-    const mesh = new THREE.Mesh(geometry,surface.material); mesh.position.set(x,y,z); mesh.scale.set(sx,sy,sz); parent.add(mesh); return mesh;
-  };
-  part(body,0,1.94,0,.24,.51,.15).rotation.x=-.16;
-  part(body,0,1.48,.06,.18,.2,.13,'pelvis');
-  part(body,0,2.31,.11,.29,.18,.19); // hunched shoulder blades
-  const head = new THREE.Group(); head.position.set(0,2.54,-.13); body.add(head);
-  part(head,0,.08,0,.17,.27,.145,'head'); // Original skull; facial features are texture-only.
-  part(head,0,-.14,.03,.075,.2,.08,'neck');
-  for (let i=0;i<6;i++) part(body,0,1.76+i*.09,.15,.038,.033,.035,'spine');
-  const arms: THREE.Group[] = [], legs: THREE.Group[] = [];
-  for (const side of [-1,1]) {
-    const arm = new THREE.Group(); arm.position.set(side*.29,2.3,0); body.add(arm); arms.push(arm);
-    part(arm,side*.035,-.44,0,.065,.47,.07,'upperArm').rotation.z=side*.08;
-    part(arm,side*.075,-.9,-.02,.073,.085,.07,'upperArm');
-    part(arm,side*.09,-1.3,-.045,.045,.42,.05,'forearm').rotation.x=-.09;
-    part(arm,side*.1,-1.69,-.08,.105,.16,.045,'palm');
-    for (let finger=0;finger<4;finger++) {
-      const f=part(arm,side*.1+(finger-1.5)*.047,-1.91-Math.sin(finger)*.025,-.095,.016,.16,.018,'finger');
-      f.rotation.z=(finger-1.5)*.1;
+    if (!geometry) {
+      geometry = mapWatcherGeometry(sphere, region);
+      geometries.set(region, geometry);
     }
-    const leg = new THREE.Group(); leg.position.set(side*.13,1.46,.04); body.add(leg); legs.push(leg);
-    part(leg,side*.025,-.34,.04,.085,.39,.09,'thigh').rotation.x=-.14;
-    part(leg,side*.035,-.75,.09,.065,.08,.07,'thigh');
-    part(leg,side*.025,-1.07,.01,.045,.35,.055,'shin').rotation.x=.15;
-    part(leg,side*.025,-1.41,-.08,.065,.05,.16,'foot');
+    const mesh = new THREE.Mesh(geometry, surface.material);
+    mesh.position.set(x, y, z);
+    mesh.scale.set(sx, sy, sz);
+    parent.add(mesh);
+    return mesh;
+  };
+
+  // Subtle radial contact shadow disc at ground level for crisp figure-ground grounding
+  const shadowCanvas = typeof document !== 'undefined' ? document.createElement('canvas') : null;
+  let contactShadowTex: THREE.CanvasTexture | null = null;
+  let contactShadowGeo: THREE.CircleGeometry | null = null;
+  let contactShadowMat: THREE.MeshBasicMaterial | null = null;
+  if (shadowCanvas) {
+    shadowCanvas.width = 128;
+    shadowCanvas.height = 128;
+    const sctx = shadowCanvas.getContext('2d');
+    if (sctx) {
+      const grad = sctx.createRadialGradient(64, 64, 8, 64, 64, 62);
+      grad.addColorStop(0, 'rgba(0,0,0,0.62)');
+      grad.addColorStop(0.55, 'rgba(0,0,0,0.28)');
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      sctx.fillStyle = grad;
+      sctx.fillRect(0, 0, 128, 128);
+    }
+    contactShadowTex = new THREE.CanvasTexture(shadowCanvas);
+    contactShadowGeo = new THREE.CircleGeometry(0.62, 16);
+    contactShadowMat = new THREE.MeshBasicMaterial({
+      map: contactShadowTex,
+      transparent: true,
+      depthWrite: false,
+      opacity: 0.85,
+    });
+    const contactShadow = new THREE.Mesh(contactShadowGeo, contactShadowMat);
+    contactShadow.rotation.x = -Math.PI / 2;
+    contactShadow.position.set(0, 0.015, 0.02);
+    root.add(contactShadow);
   }
-  let phase = 0, weight = 0;
-  return { root, animate(dt: number, speed: number, frozen: boolean, crouch: boolean) {
-    // Freeze the complete pose immediately; never integrate a gait while observed.
-    if (frozen) return;
-    weight = THREE.MathUtils.damp(weight,speed > .01 ? 1 : 0,7,dt);
-    phase += dt*(speed > 1.5 ? 6.2 : 3.1);
-    body.scale.y = THREE.MathUtils.damp(body.scale.y,crouch ? .81 : 1,12,dt);
-    head.rotation.z=.16+Math.sin(phase*.47)*.045;
-    head.rotation.y=Math.sin(phase*.31)*.07;
-    legs.forEach((leg,i)=>leg.rotation.x=Math.sin(phase+i*Math.PI)*.24*weight);
-    arms.forEach((arm,i)=>arm.rotation.x=-Math.sin(phase+i*Math.PI+.3)*.15*weight);
-  }, dispose() { sphere.dispose(); geometries.forEach(geometry => geometry.dispose()); surface.dispose(); } };
+
+  // Root articulated pelvis / hips
+  const HIPS_BASE_Y = 1.46;
+  const hips = new THREE.Group();
+  hips.name = 'watcher-hips';
+  hips.position.set(0, HIPS_BASE_Y, 0.06);
+  root.add(hips);
+  part(hips, 0, 0, 0, 0.185, 0.21, 0.135, 'pelvis');
+
+  // Torso / upper body pivoted above pelvis
+  const torso = new THREE.Group();
+  torso.name = 'watcher-torso';
+  torso.position.set(0, 0.05, -0.02);
+  hips.add(torso);
+
+  const chestMesh = part(torso, 0, 0.4, -0.04, 0.24, 0.54, 0.15, 'torso');
+  chestMesh.rotation.x = -0.16;
+  part(torso, 0, 0.75, 0.07, 0.29, 0.18, 0.19, 'torso'); // hunched shoulder blades
+  for (let i = 0; i < 6; i++) {
+    part(torso, 0, 0.2 + i * 0.09, 0.11, 0.038, 0.033, 0.035, 'spine');
+  }
+
+  // Neck & Head hierarchy
+  const neck = new THREE.Group();
+  neck.name = 'watcher-neck';
+  neck.position.set(0, 0.84, -0.09);
+  torso.add(neck);
+  part(neck, 0, 0.07, 0.01, 0.075, 0.2, 0.08, 'neck');
+
+  const head = new THREE.Group();
+  head.name = 'watcher-head';
+  head.position.set(0, 0.2, -0.02);
+  neck.add(head);
+  part(head, 0, 0.07, 0, 0.17, 0.27, 0.145, 'head');
+
+  // Limbs with shoulder -> upperArm -> elbow -> hand -> fingers and hip -> knee -> foot
+  const shoulders: THREE.Group[] = [];
+  const upperArms: THREE.Group[] = [];
+  const elbows: THREE.Group[] = [];
+  const hands: THREE.Group[] = [];
+  const fingers: [THREE.Group[], THREE.Group[]] = [[], []];
+  const hipsLegs: THREE.Group[] = [];
+  const knees: THREE.Group[] = [];
+  const feet: THREE.Group[] = [];
+
+  for (let idx = 0; idx < 2; idx++) {
+    const side = idx === 0 ? -1 : 1;
+
+    // Shoulder -> Upper Arm -> Elbow -> Hand -> Fingers
+    const shoulder = new THREE.Group();
+    shoulder.name = `watcher-shoulder-${side < 0 ? 'L' : 'R'}`;
+    shoulder.position.set(side * 0.29, 0.74, 0.02);
+    torso.add(shoulder);
+    shoulders.push(shoulder);
+
+    const upperArm = new THREE.Group();
+    upperArm.name = `watcher-upperArm-${side < 0 ? 'L' : 'R'}`;
+    shoulder.add(upperArm);
+    upperArms.push(upperArm);
+
+    part(upperArm, side * 0.035, -0.44, 0, 0.065, 0.47, 0.07, 'upperArm').rotation.z =
+      side * 0.08;
+    part(upperArm, side * 0.075, -0.9, -0.02, 0.073, 0.085, 0.07, 'upperArm');
+
+    const elbow = new THREE.Group();
+    elbow.name = `watcher-elbow-${side < 0 ? 'L' : 'R'}`;
+    elbow.position.set(side * 0.075, -0.9, -0.02);
+    upperArm.add(elbow);
+    elbows.push(elbow);
+
+    part(elbow, side * 0.015, -0.4, -0.025, 0.045, 0.42, 0.05, 'forearm').rotation.x =
+      -0.09;
+
+    const hand = new THREE.Group();
+    hand.name = `watcher-hand-${side < 0 ? 'L' : 'R'}`;
+    hand.position.set(side * 0.025, -0.79, -0.06);
+    elbow.add(hand);
+    hands.push(hand);
+
+    part(hand, 0, 0, 0, 0.078, 0.145, 0.038, 'palm');
+
+    for (let f = 0; f < 4; f++) {
+      const fingerPivot = new THREE.Group();
+      fingerPivot.position.set((f - 1.5) * 0.036, -0.1, -0.01);
+      fingerPivot.rotation.z = (f - 1.5) * 0.09;
+      hand.add(fingerPivot);
+      part(
+        fingerPivot,
+        0,
+        -0.085 - Math.sin(f) * 0.02,
+        -0.004,
+        0.014,
+        0.155,
+        0.016,
+        'finger',
+      );
+      fingers[idx].push(fingerPivot);
+    }
+
+    // Hip -> Knee -> Foot
+    const hipLeg = new THREE.Group();
+    hipLeg.name = `watcher-hipLeg-${side < 0 ? 'L' : 'R'}`;
+    hipLeg.position.set(side * 0.13, -0.02, -0.02);
+    hips.add(hipLeg);
+    hipsLegs.push(hipLeg);
+
+    part(hipLeg, side * 0.025, -0.34, 0.04, 0.085, 0.39, 0.09, 'thigh').rotation.x = -0.14;
+    part(hipLeg, side * 0.035, -0.75, 0.09, 0.065, 0.08, 0.07, 'thigh');
+
+    const knee = new THREE.Group();
+    knee.name = `watcher-knee-${side < 0 ? 'L' : 'R'}`;
+    knee.position.set(side * 0.035, -0.75, 0.09);
+    hipLeg.add(knee);
+    knees.push(knee);
+
+    part(knee, -side * 0.01, -0.32, -0.08, 0.045, 0.35, 0.055, 'shin').rotation.x = 0.15;
+
+    const foot = new THREE.Group();
+    foot.name = `watcher-foot-${side < 0 ? 'L' : 'R'}`;
+    foot.position.set(-side * 0.01, -0.66, -0.17);
+    knee.add(foot);
+    feet.push(foot);
+
+    part(foot, 0, 0, 0, 0.065, 0.05, 0.16, 'foot');
+  }
+
+  const rig: WatcherJointRig = {
+    hips,
+    torso,
+    neck,
+    head,
+    shoulders: shoulders as [THREE.Group, THREE.Group],
+    upperArms: upperArms as [THREE.Group, THREE.Group],
+    elbows: elbows as [THREE.Group, THREE.Group],
+    hands: hands as [THREE.Group, THREE.Group],
+    fingers,
+    hipsLegs: hipsLegs as [THREE.Group, THREE.Group],
+    knees: knees as [THREE.Group, THREE.Group],
+    feet: feet as [THREE.Group, THREE.Group],
+  };
+
+  let gaitPhase = 0;
+  let breathTime = 0;
+  let idleTwitchTime = 0;
+  let prevSinPhase = 0;
+
+  // Smoothed state blend weights
+  let walkBlend = 0;
+  let runBlend = 0;
+  let attackBlend = 0;
+  let crouchBlend = 0;
+
+  const damp = THREE.MathUtils.damp;
+
+  const resetPoseState = () => {
+    gaitPhase = 0;
+    breathTime = 0;
+    idleTwitchTime = 0;
+    prevSinPhase = 0;
+    walkBlend = 0;
+    runBlend = 0;
+    attackBlend = 0;
+    crouchBlend = 0;
+    hips.position.set(0, HIPS_BASE_Y, 0.06);
+    hips.rotation.set(0, 0, 0);
+    hips.scale.set(1, 1, 1);
+    torso.rotation.set(0, 0, 0);
+    torso.scale.set(1, 1, 1);
+    neck.rotation.set(0, 0, 0);
+    head.rotation.set(0, 0, 0);
+    for (let i = 0; i < 2; i++) {
+      shoulders[i].rotation.set(0, 0, 0);
+      upperArms[i].rotation.set(0, 0, 0);
+      elbows[i].rotation.set(0, 0, 0);
+      hands[i].rotation.set(0, 0, 0);
+      hipsLegs[i].rotation.set(0, 0, 0);
+      knees[i].rotation.set(0, 0, 0);
+      feet[i].rotation.set(0, 0, 0);
+      for (let f = 0; f < 4; f++) {
+        fingers[i][f].rotation.x = 0;
+      }
+    }
+  };
+
+  const animate = (
+    dt: number,
+    speed: number,
+    frozen: boolean,
+    crouch: boolean,
+    options?: WatcherAnimateOptions,
+  ) => {
+    const safeDt = Math.min(Math.max(dt, 0), 0.1);
+    breathTime += safeDt;
+
+    if (frozen) {
+      // Frozen keeps limb rotations locked; optional micro chest-heave only if explicitly enabled.
+      if (options?.allowFrozenMicroBreath) {
+        const heave = 1 + Math.sin(breathTime * 1.4) * 0.008;
+        torso.scale.set(heave, 1, heave);
+      }
+      return;
+    }
+
+    const animState: WatcherAnimState =
+      options?.animState ?? (speed > 1.35 ? 'RUN' : speed > 0.08 ? 'WALK' : 'IDLE');
+
+    const targetAttack = animState === 'ATTACK' ? 1 : 0;
+    const targetRun = animState === 'RUN' ? 1 : 0;
+    const targetWalk = animState === 'WALK' ? 1 : 0;
+    const targetIdle = Math.max(0, 1 - targetAttack - targetRun - targetWalk);
+
+    walkBlend = damp(walkBlend, targetWalk, 9, safeDt);
+    runBlend = damp(runBlend, targetRun, 10, safeDt);
+    attackBlend = damp(attackBlend, targetAttack, 18, safeDt);
+    crouchBlend = damp(crouchBlend, crouch ? 1 : 0, 11, safeDt);
+
+    const moveBlend = Math.min(1, walkBlend + runBlend);
+    const isRunning = runBlend > 0.45;
+
+    // Step cadence synchronized to movement speed so feet never skate
+    const strideFreq =
+      speed > 0.05
+        ? (isRunning ? 5.8 : 3.35) *
+          Math.max(0.65, Math.min(1.65, speed / (isRunning ? 1.85 : 1.0)))
+        : 0;
+    if (strideFreq > 0 && attackBlend < 0.5) {
+      const nextPhase = gaitPhase + safeDt * strideFreq;
+      if (Math.floor(nextPhase / Math.PI) > Math.floor(gaitPhase / Math.PI)) {
+        if (moveBlend > 0.25) {
+          options?.onFootstep?.(Math.min(1, 0.45 + speed * 0.35), isRunning);
+        }
+      }
+      prevSinPhase = Math.sin(nextPhase);
+      gaitPhase = nextPhase;
+    }
+
+    idleTwitchTime += safeDt;
+    const breath = Math.sin(breathTime * 1.55);
+    const twitchPulse = Math.pow(Math.max(0, Math.sin(idleTwitchTime * 0.75 + Math.sin(idleTwitchTime * 1.9))), 6);
+    const idleWeight = Math.max(0, 1 - moveBlend - attackBlend);
+
+    // 1. Torso & Breathing & Hunch
+    const chestScale = 1 + breath * (0.018 * idleWeight + 0.025 * runBlend);
+    torso.scale.set(chestScale, 1, chestScale);
+
+    const targetTorsoPitch =
+      (-0.1 - breath * 0.025) * targetIdle +
+      (-0.24 - Math.sin(gaitPhase * 2) * 0.03) * walkBlend +
+      (-0.44 - Math.sin(gaitPhase * 2) * 0.05) * runBlend +
+      (-0.34 - (options?.attackProgress ?? 0) * 0.2) * attackBlend -
+      crouchBlend * 0.22;
+
+    const targetTorsoYaw =
+      Math.sin(breathTime * 0.45) * 0.04 * targetIdle +
+      Math.sin(gaitPhase) * 0.09 * walkBlend +
+      Math.sin(gaitPhase) * 0.16 * runBlend;
+
+    const targetTorsoRoll =
+      Math.sin(breathTime * 0.32) * 0.035 * targetIdle +
+      Math.cos(gaitPhase) * 0.05 * walkBlend +
+      Math.cos(gaitPhase) * 0.08 * runBlend;
+
+    torso.rotation.x = damp(torso.rotation.x, targetTorsoPitch, 11, safeDt);
+    torso.rotation.y = damp(torso.rotation.y, targetTorsoYaw, 11, safeDt);
+    torso.rotation.z = damp(torso.rotation.z, targetTorsoRoll, 11, safeDt);
+
+    // 2. Neck & Head (unnatural tilt + player gaze tracking)
+    const lookYaw = THREE.MathUtils.clamp(options?.lookYawOffset ?? 0, -0.55, 0.55);
+    const lookPitch = THREE.MathUtils.clamp(options?.lookPitchOffset ?? 0, -0.35, 0.35);
+
+    const targetNeckPitch =
+      (0.08 + breath * 0.02) * targetIdle +
+      0.18 * walkBlend +
+      0.32 * runBlend +
+      0.24 * attackBlend +
+      crouchBlend * 0.15;
+    const targetNeckYaw = Math.sin(breathTime * 0.6) * 0.08 * targetIdle + lookYaw * 0.35;
+    const targetNeckRoll = (0.11 + twitchPulse * 0.16) * targetIdle - Math.sin(gaitPhase) * 0.04 * moveBlend;
+
+    neck.rotation.x = damp(neck.rotation.x, targetNeckPitch, 10, safeDt);
+    neck.rotation.y = damp(neck.rotation.y, targetNeckYaw, 10, safeDt);
+    neck.rotation.z = damp(neck.rotation.z, targetNeckRoll, 10, safeDt);
+
+    const targetHeadPitch =
+      (0.05 + lookPitch * 0.65) * (1 - attackBlend) +
+      (0.16 + Math.sin((options?.attackProgress ?? 0) * Math.PI) * 0.14) * attackBlend;
+    const targetHeadYaw =
+      (Math.sin(breathTime * 0.42) * 0.12 + twitchPulse * 0.18) * targetIdle +
+      lookYaw * 0.65 * (runBlend + walkBlend * 0.5 + attackBlend);
+    const targetHeadRoll =
+      (0.19 + Math.sin(breathTime * 0.7) * 0.05 + twitchPulse * 0.22) * targetIdle +
+      (0.12 + Math.cos(gaitPhase) * 0.05) * walkBlend +
+      (0.07 + Math.cos(gaitPhase) * 0.07) * runBlend -
+      0.16 * attackBlend;
+
+    head.rotation.x = damp(head.rotation.x, targetHeadPitch, 12, safeDt);
+    head.rotation.y = damp(head.rotation.y, targetHeadYaw, 12, safeDt);
+    head.rotation.z = damp(head.rotation.z, targetHeadRoll, 12, safeDt);
+
+    // 3. Legs (hip + knee + foot) & Grounding
+    let lowestFootDrop = 0;
+    const thighLen = 0.75;
+    const shinLen = 0.66;
+
+    for (let i = 0; i < 2; i++) {
+      const phaseOffset = i * Math.PI;
+      const stride = Math.sin(gaitPhase + phaseOffset);
+      const lift = Math.max(0, Math.cos(gaitPhase + phaseOffset));
+
+      // Asymmetric eerie gait: slightly uneven stride amplitude
+      const asym = i === 0 ? 1.0 : 0.92;
+
+      const hipPitch =
+        0.04 * targetIdle +
+        stride * 0.34 * asym * walkBlend +
+        (stride * 0.58 * asym + 0.14) * runBlend +
+        (i === 0 ? 0.24 : -0.18) * attackBlend +
+        crouchBlend * 0.32;
+
+      // Knee flexes backward (negative X) during swing and crouched run
+      const kneePitch =
+        -0.1 * targetIdle +
+        (-0.18 - lift * 0.48) * walkBlend +
+        (-0.28 - lift * 0.78) * runBlend -
+        0.22 * attackBlend -
+        crouchBlend * 0.64;
+
+      // Foot compensates so sole stays near level with floor during stance
+      const footPitch =
+        0.06 * targetIdle +
+        (-hipPitch * 0.35 + lift * 0.25) * moveBlend;
+
+      hipsLegs[i].rotation.x = damp(hipsLegs[i].rotation.x, hipPitch, 14, safeDt);
+      hipsLegs[i].rotation.z = damp(
+        hipsLegs[i].rotation.z,
+        (i === 0 ? -0.025 : 0.025) * (1 + runBlend * 0.6),
+        12,
+        safeDt,
+      );
+      knees[i].rotation.x = damp(knees[i].rotation.x, kneePitch, 14, safeDt);
+      feet[i].rotation.x = damp(feet[i].rotation.x, footPitch, 14, safeDt);
+
+      // Analytical vertical reach of this leg to keep feet planted on the ground plane
+      const effHip = hipsLegs[i].rotation.x;
+      const effShin = effHip + knees[i].rotation.x;
+      const reach = thighLen * Math.cos(effHip) + shinLen * Math.cos(effShin);
+      const drop = thighLen + shinLen - reach;
+      if (drop > lowestFootDrop) lowestFootDrop = drop;
+    }
+
+    // Hips sway & height compensation for knee flexion / crouch
+    const hipSwayYaw =
+      -Math.sin(gaitPhase) * 0.07 * walkBlend - Math.sin(gaitPhase) * 0.14 * runBlend;
+    const hipSwayRoll =
+      Math.cos(gaitPhase) * 0.04 * walkBlend + Math.cos(gaitPhase) * 0.07 * runBlend;
+    const strideBounce = Math.abs(Math.sin(gaitPhase)) * (0.045 * walkBlend + 0.095 * runBlend);
+    const attackLungeZ = -(options?.attackProgress ?? 0) * 0.28 * attackBlend;
+
+    hips.rotation.y = damp(hips.rotation.y, hipSwayYaw, 12, safeDt);
+    hips.rotation.z = damp(hips.rotation.z, hipSwayRoll, 12, safeDt);
+    hips.position.y = damp(
+      hips.position.y,
+      HIPS_BASE_Y - lowestFootDrop * 0.85 + strideBounce - crouchBlend * 0.16,
+      14,
+      safeDt,
+    );
+    hips.position.z = damp(hips.position.z, 0.06 + attackLungeZ, 16, safeDt);
+
+    // 4. Arms (shoulder -> upperArm -> elbow -> hand -> fingers)
+    const atkP = options?.attackProgress ?? 0;
+    for (let i = 0; i < 2; i++) {
+      const side = i === 0 ? -1 : 1;
+      const phaseOffset = i * Math.PI + 0.35;
+      const swing = Math.sin(gaitPhase + phaseOffset);
+      const asymArm = i === 0 ? 1.05 : 0.82;
+
+      const shoulderRoll =
+        side * (0.04 + breath * 0.015) * targetIdle +
+        side * (0.06 + Math.cos(gaitPhase + phaseOffset) * 0.05) * walkBlend +
+        side * (0.14 + Math.cos(gaitPhase + phaseOffset) * 0.09) * runBlend +
+        side * 0.18 * attackBlend;
+
+      const upperArmPitch =
+        (0.08 + Math.sin(breathTime * 1.1 + i * 1.7) * 0.035) * targetIdle +
+        (0.12 - swing * 0.26 * asymArm) * walkBlend +
+        (0.48 - swing * 0.58 * asymArm) * runBlend +
+        (1.15 + Math.sin(atkP * Math.PI) * 0.38) * attackBlend;
+
+      const upperArmRoll =
+        side * 0.05 * targetIdle +
+        side * 0.08 * walkBlend +
+        side * 0.14 * runBlend -
+        side * (0.22 * (1 - atkP * 0.5)) * attackBlend;
+
+      // Forearms bend forward (+X) naturally; extend toward camera in ATTACK
+      const elbowPitch =
+        (0.18 + Math.sin(breathTime * 1.3 + i) * 0.04) * targetIdle +
+        (0.32 + Math.max(0, -swing) * 0.22) * walkBlend +
+        (0.68 + Math.max(0, -swing) * 0.42) * runBlend +
+        (0.24 - atkP * 0.16) * attackBlend;
+
+      const handPitch =
+        (0.12 + twitchPulse * 0.18) * targetIdle +
+        0.16 * walkBlend +
+        0.24 * runBlend -
+        0.28 * attackBlend;
+
+      const handRoll =
+        side * 0.08 * targetIdle + side * 0.15 * runBlend + side * 0.25 * attackBlend;
+
+      shoulders[i].rotation.z = damp(shoulders[i].rotation.z, shoulderRoll, 12, safeDt);
+      upperArms[i].rotation.x = damp(upperArms[i].rotation.x, upperArmPitch, 14, safeDt);
+      upperArms[i].rotation.z = damp(upperArms[i].rotation.z, upperArmRoll, 14, safeDt);
+      elbows[i].rotation.x = damp(elbows[i].rotation.x, elbowPitch, 14, safeDt);
+      hands[i].rotation.x = damp(hands[i].rotation.x, handPitch, 14, safeDt);
+      hands[i].rotation.z = damp(hands[i].rotation.z, handRoll, 14, safeDt);
+
+      // Articulated finger curl / creepy idle twitching / attack clawing
+      for (let f = 0; f < 4; f++) {
+        const fingerWave = Math.sin(breathTime * (1.8 + f * 0.45) + i * 2.1 + f);
+        const targetFingerCurl =
+          (0.18 + fingerWave * 0.14) * targetIdle +
+          (0.28 + fingerWave * 0.08) * walkBlend +
+          0.52 * runBlend +
+          (0.12 + Math.sin(atkP * Math.PI) * 0.58) * attackBlend;
+        fingers[i][f].rotation.x = damp(fingers[i][f].rotation.x, targetFingerCurl, 14, safeDt);
+      }
+    }
+  };
+
+  return {
+    root,
+    rig,
+    animate,
+    resetPoseState,
+    dispose() {
+      sphere.dispose();
+      geometries.forEach((geometry) => geometry.dispose());
+      contactShadowGeo?.dispose();
+      contactShadowMat?.dispose();
+      contactShadowTex?.dispose();
+      surface.dispose();
+    },
+  };
 }

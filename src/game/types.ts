@@ -153,6 +153,15 @@ export interface HudSnapshot {
   notification: HudNotification | null;
 }
 
+export type WatcherAnimState = 'IDLE' | 'WALK' | 'RUN' | 'FROZEN' | 'ATTACK';
+
+export type TensionLevel = 1 | 2 | 3 | 4;
+
+export interface AccessibilitySettings {
+  reducedCameraMotion: boolean;
+  disableFlashes: boolean;
+}
+
 export interface GameEngineCallbacks {
   onCapture: () => void;
   onHudUpdate: (snapshot: HudSnapshot) => void;
@@ -160,3 +169,4 @@ export interface GameEngineCallbacks {
   onPauseRequest: () => void;
   onWebglError: (message: string) => void;
 }
+

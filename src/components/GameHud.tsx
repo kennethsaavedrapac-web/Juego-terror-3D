@@ -5,14 +5,21 @@ import type { HudSnapshot } from '../game/types';
 interface GameHudProps {
   hud: HudSnapshot;
   staminaFillRef: RefObject<HTMLDivElement | null>;
+  vignetteRef: RefObject<HTMLDivElement | null>;
   onPause: () => void;
 }
 
-export const GameHud: FC<GameHudProps> = ({ hud, staminaFillRef, onPause }) => {
+export const GameHud: FC<GameHudProps> = ({
+  hud,
+  staminaFillRef,
+  vignetteRef,
+  onPause,
+}) => {
   return (
     <div className="pointer-events-none fixed inset-0 z-10 flex flex-col justify-between p-6">
-      {/* Subtle atmospheric peripheral vignette */}
+      {/* Subtle atmospheric peripheral vignette (modulated by tension via DOM ref) */}
       <div
+        ref={vignetteRef}
         className="pointer-events-none fixed inset-0"
         style={{
           background:

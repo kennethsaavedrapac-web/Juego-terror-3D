@@ -113,6 +113,12 @@ export class FirstPersonController {
     dt: number,
     camera: THREE.PerspectiveCamera,
     colliders: readonly AABBCollider[],
+    effects?: {
+      reducedMotion?: boolean;
+      trauma?: number;
+      chaseIntensity?: number;
+      elapsed?: number;
+    },
   ): { zoneName: string; forwardDir: THREE.Vector3 } {
     const turnLeft = this.keysPressed.has('ArrowLeft') ? 1 : 0;
     const turnRight = this.keysPressed.has('ArrowRight') ? 1 : 0;
@@ -159,6 +165,7 @@ export class FirstPersonController {
     }
     this.bobWeight = THREE.MathUtils.damp(this.bobWeight, isMoving ? 1 : 0, 12, dt);
     const bob = computeHeadBob(this.distanceWalked, this.isSprinting);
+    const motionScale = effects?.reducedMotion ? 0.25 : 1.0;
 
     const targetFov = this.isSprinting ? SPRINT_FOV : BASE_FOV;
     this.currentFov = THREE.MathUtils.damp(this.currentFov, targetFov, 10, dt);
@@ -170,12 +177,24 @@ export class FirstPersonController {
     const rightX = Math.cos(this.yaw);
     const rightZ = -Math.sin(this.yaw);
     camera.position.set(
-      this.position.x + rightX * bob.offsetX * this.bobWeight,
-      this.position.y + bob.offsetY * this.bobWeight,
-      this.position.z + rightZ * bob.offsetX * this.bobWeight,
+      this.position.x + rightX * bob.offsetX * this.bobWeight * motionScale,
+      this.position.y + bob.offsetY * this.bobWeight * motionScale,
+      this.position.z + rightZ * bob.offsetX * this.bobWeight * motionScale,
     );
 
-    this.euler.set(this.pitch, this.yaw, 0, 'YXZ');
+    const trauma = effects?.trauma ?? 0;
+    const chase = effects?.chaseIntensity ?? 0;
+    const t = effects?.elapsed ?? 0;
+    const shakeSq = trauma * trauma * motionScale;
+    const chaseSway = chase * 0.011 * motionScale;
+
+    const pitchOffset =
+      Math.sin(t * 27.3) * 0.042 * shakeSq + Math.sin(t * 5.8) * chaseSway;
+    const yawOffset = Math.cos(t * 23.1) * 0.036 * shakeSq;
+    const rollOffset =
+      Math.sin(t * 31.7) * 0.048 * shakeSq + Math.cos(t * 4.4) * chaseSway * 0.9;
+
+    this.euler.set(this.pitch + pitchOffset, this.yaw + yawOffset, rollOffset, 'YXZ');
     camera.quaternion.setFromEuler(this.euler);
 
     return {

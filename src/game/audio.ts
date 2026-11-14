@@ -1,6 +1,6 @@
 let audioCtx: AudioContext | null = null;
 
-function getAudioContext(): AudioContext | null {
+export function getSharedAudioContext(): AudioContext | null {
   if (typeof window === 'undefined') return null;
   if (!audioCtx) {
     const Ctor =
@@ -18,6 +18,10 @@ function getAudioContext(): AudioContext | null {
     audioCtx.resume().catch(() => {});
   }
   return audioCtx;
+}
+
+function getAudioContext(): AudioContext | null {
+  return getSharedAudioContext();
 }
 
 export function playDoorSound(

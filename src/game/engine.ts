@@ -4,14 +4,20 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import type { CollectiblesSystem } from './collectibles';
 import type { DoorSystem } from './doors';
+import { floorHeightAt } from './expansion';
 import { FlashlightController } from './flashlight';
 import { InteractionSystem } from './interactions';
 import { InventoryManager } from './inventory';
+import { JumpscareSystem } from './jumpscares';
 import { buildAbandonedBuilding } from './level';
 import { clampDelta } from './physics';
 import { FirstPersonController } from './player';
+import { SpatialAudioEngine } from './spatialAudio';
+import { SupernaturalEventsSystem } from './supernatural';
+import { TensionSystem } from './tension';
 import { createBuildingTextures } from './textures';
 import type {
+  AccessibilitySettings,
   GameEngineCallbacks,
   GameStatus,
   HudNotification,
@@ -34,6 +40,7 @@ function detectSoftwareWebGL(): boolean {
 }
 
 const EMPTY_PROMPT: InteractPrompt = { visible: false, keyLabel: 'E', text: '' };
+const ATTACK_DURATION = 0.58;
 
 export class HorrorGameEngine {
   private container: HTMLElement;
@@ -41,6 +48,8 @@ export class HorrorGameEngine {
   private renderer!: THREE.WebGLRenderer;
   private scene!: THREE.Scene;
   private camera!: THREE.PerspectiveCamera;
+  private fog!: THREE.FogExp2;
+  private hemiLight!: THREE.HemisphereLight;
   private controller!: FirstPersonController;
   private doorSystem!: DoorSystem;
   private collectibles!: CollectiblesSystem;
@@ -48,6 +57,17 @@ export class HorrorGameEngine {
   private watcher!: Watcher;
   private interactions!: InteractionSystem;
   private inventory = new InventoryManager();
+
+  // Phase 5 systems
+  private tension = new TensionSystem();
+  private spatialAudio = new SpatialAudioEngine();
+  private supernatural = new SupernaturalEventsSystem();
+  private jumpscares = new JumpscareSystem();
+  private settings: AccessibilitySettings = {
+    reducedCameraMotion: false,
+    disableFlashes: false,
+  };
+
   private isSoftwareGl = false;
   private qa?: ReturnType<typeof createPhase4QA>;
 
@@ -57,6 +77,11 @@ export class HorrorGameEngine {
   private elapsed = 0;
   private disposed = false;
 
+  private attackSequenceActive = false;
+  private attackElapsed = 0;
+  private cameraTrauma = 0;
+  private growlTimer = 8;
+
   private disposeLevel = () => {};
   private disposeTextures = () => {};
   private envRT: THREE.WebGLRenderTarget | null = null;
@@ -64,7 +89,7 @@ export class HorrorGameEngine {
   private dustGeo: THREE.BufferGeometry | null = null;
   private dustMat: THREE.PointsMaterial | null = null;
   private dustPositions!: Float32Array;
-  private dustCount = 150;
+  private dustCount = 160;
   private flickerFixtures: ReturnType<typeof buildAbandonedBuilding>['flickerFixtures'] = [];
   private colliders: ReturnType<typeof buildAbandonedBuilding>['colliders'] = [];
   private spawnPosition = new THREE.Vector3(0, 0, 15.2);
@@ -85,6 +110,12 @@ export class HorrorGameEngine {
   private lastPromptText = '';
   private lastPromptVisible = false;
   private staminaBarEl: HTMLElement | null = null;
+  private vignetteEl: HTMLElement | null = null;
+
+  private readonly lookQuatTarget = new THREE.Quaternion();
+  private readonly lookMatrix = new THREE.Matrix4();
+  private readonly lookTargetVec = new THREE.Vector3();
+  private readonly upVec = new THREE.Vector3(0, 1, 0);
 
   constructor(container: HTMLElement, callbacks: GameEngineCallbacks) {
     this.container = container;
@@ -94,6 +125,14 @@ export class HorrorGameEngine {
 
   public setStaminaBarElement(el: HTMLElement | null) {
     this.staminaBarEl = el;
+  }
+
+  public setVignetteElement(el: HTMLElement | null) {
+    this.vignetteEl = el;
+  }
+
+  public setAccessibilitySettings(next: AccessibilitySettings) {
+    this.settings = { ...next };
   }
 
   private pushNotification(
@@ -116,7 +155,14 @@ export class HorrorGameEngine {
     this.status = nextStatus;
 
     if (resetRun) {
+      this.attackSequenceActive = false;
+      this.attackElapsed = 0;
+      this.cameraTrauma = 0;
+      this.growlTimer = 8;
       this.watcher.reset();
+      this.tension.reset();
+      this.supernatural.reset();
+      this.jumpscares.reset();
       this.inventory.reset();
       this.collectibles.reset();
       this.doorSystem.reset();
@@ -126,10 +172,11 @@ export class HorrorGameEngine {
       this.controller.reset(this.spawnPosition, this.spawnYaw);
       this.flashlight.reset(nextStatus === 'playing');
       this.updateStaminaDom(100, false);
+      this.updateVignetteDom(0.08, false);
     }
 
     if (nextStatus === 'playing') {
-      this.controller.setActive(true);
+      this.controller.setActive(!this.attackSequenceActive);
       if (prevStatus === 'title' || resetRun) {
         this.flashlight.reset(true);
         this.controller.update(0, this.camera, this.colliders);
@@ -138,6 +185,19 @@ export class HorrorGameEngine {
       this.broadcastHud(true, 'Recepción', prompt);
     } else {
       this.controller.setActive(false);
+      this.spatialAudio.update({
+        dt: 0,
+        elapsed: this.elapsed,
+        active: false,
+        camera: this.camera,
+        watcherActive: false,
+        watcherPos: this.watcher.position,
+        watcherState: this.watcher.state,
+        tensionLevel: 1,
+        tensionIntensity: 0,
+        exhausted: false,
+        colliders: this.colliders,
+      });
       if (nextStatus === 'title') {
         this.flashlight.reset(false);
       }
@@ -184,7 +244,8 @@ export class HorrorGameEngine {
     this.scene = new THREE.Scene();
     const bgColor = new THREE.Color(0x050608);
     this.scene.background = bgColor;
-    this.scene.fog = new THREE.FogExp2(0x050608, 0.036);
+    this.fog = new THREE.FogExp2(0x050608, 0.036);
+    this.scene.fog = this.fog;
 
     this.camera = new THREE.PerspectiveCamera(70, width / height, 0.1, 65);
     this.scene.add(this.camera);
@@ -203,8 +264,8 @@ export class HorrorGameEngine {
     roomEnv.dispose();
     pmrem.dispose();
 
-    const hemi = new THREE.HemisphereLight(0x283a4d, 0x0a0908, 0.24);
-    this.scene.add(hemi);
+    this.hemiLight = new THREE.HemisphereLight(0x283a4d, 0x0a0908, 0.24);
+    this.scene.add(this.hemiLight);
 
     const keyDir = new THREE.DirectionalLight(0xffcfa0, 0.12);
     keyDir.position.set(4, 10, 8);
@@ -235,6 +296,7 @@ export class HorrorGameEngine {
         onCollectKey: (key) => {
           const result = this.inventory.collectKey(key.id);
           if (result.added) {
+            this.tension.addEventSpike(0.18);
             const msg = result.hasAllKeys
               ? `Recogiste ${key.name} (${result.count}/${this.inventory.totalKeys}). ¡Tienes todas las llaves! Regresa a la salida.`
               : `Recogiste ${key.name} (${result.count}/${this.inventory.totalKeys}).`;
@@ -292,24 +354,94 @@ export class HorrorGameEngine {
     );
 
     const enemyOccluders = [...level.occlusionMeshes];
-    this.doorSystem.group.traverse(child => {
+    this.doorSystem.group.traverse((child) => {
       const mesh = child as THREE.Mesh;
-      if (mesh.isMesh && (Array.isArray(mesh.material) ? mesh.material.every(m => !m.transparent) : !mesh.material.transparent)) enemyOccluders.push(child);
+      if (
+        mesh.isMesh &&
+        (Array.isArray(mesh.material)
+          ? mesh.material.every((m) => !m.transparent)
+          : !mesh.material.transparent)
+      ) {
+        enemyOccluders.push(child);
+      }
     });
-    this.watcher = new Watcher(this.colliders, enemyOccluders, () => {
-      this.setStatus('captured');
-      console.info('[Watcher] Captura', { keys: this.inventory.getSnapshot().keysCollected });
-      this.callbacks.onCapture();
-    }, () => this.pushNotification('No dejes de mirarlo. Si apartas la mirada, se acerca.', 'alert', 6));
+
+    this.watcher = new Watcher(
+      this.colliders,
+      enemyOccluders,
+      () => {
+        // Trigger dramatic 0.58s 3D attack lunge + scream before showing provisional capture screen
+        if (this.attackSequenceActive) return;
+        this.attackSequenceActive = true;
+        this.attackElapsed = 0;
+        this.controller.setActive(false);
+        this.cameraTrauma = 0.85;
+        this.spatialAudio.playMonsterAttack();
+        console.info('[Watcher] Ataque / Captura', {
+          keys: this.inventory.getSnapshot().keysCollected,
+        });
+      },
+      () =>
+        this.pushNotification(
+          'No dejes de mirarlo. Si apartas la mirada, se acerca.',
+          'alert',
+          6,
+        ),
+      {
+        onFootstep: (intensity, isRunning, pos) => {
+          if (this.status === 'playing' && !this.attackSequenceActive) {
+            this.spatialAudio.playMonsterFootstep(
+              pos,
+              this.controller.position,
+              this.colliders,
+              intensity,
+              isRunning,
+            );
+          }
+        },
+        onStateChange: (prev, next) => {
+          if (this.status !== 'playing') return;
+          if (next === 'CHASE' && prev !== 'CHASE') {
+            this.spatialAudio.playMonsterGrowl(
+              this.watcher.position,
+              this.controller.position,
+              this.colliders,
+              true,
+            );
+          } else if (next === 'STALK' && prev === 'FROZEN') {
+            this.spatialAudio.playLimbCreak(
+              this.watcher.position,
+              this.controller.position,
+              this.colliders,
+            );
+          }
+        },
+      },
+    );
     this.scene.add(this.watcher.model.root);
+    this.scene.add(this.jumpscares.group);
+
     if (import.meta.env.DEV && new URLSearchParams(location.search).get('qa') === '1') {
-      this.qa = createPhase4QA((x,z,yaw,enemy) => {
-        this.watcher.reset();
-        this.controller.reset(new THREE.Vector3(x,0,z),yaw);
-        this.controller.update(0,this.camera,this.colliders);
-        if (enemy) { this.watcher.active=true; this.watcher.model.root.visible=true; this.watcher.position.set(0,0,-3); this.watcher.model.root.rotation.y=Math.PI; }
-      }, () => { this.controller.yaw+=Math.PI; this.controller.targetYaw=this.controller.yaw; });
+      this.qa = createPhase4QA(
+        (x, z, yaw, enemy) => {
+          this.attackSequenceActive = false;
+          this.watcher.reset();
+          this.controller.reset(new THREE.Vector3(x, 0, z), yaw);
+          this.controller.update(0, this.camera, this.colliders);
+          if (enemy) {
+            this.watcher.active = true;
+            this.watcher.model.root.visible = true;
+            this.watcher.position.set(0, 0, -3);
+            this.watcher.model.root.rotation.y = Math.PI;
+          }
+        },
+        () => {
+          this.controller.yaw += Math.PI;
+          this.controller.targetYaw = this.controller.yaw;
+        },
+      );
     }
+
     this.scene.updateMatrixWorld(true);
     this.initDustMotes();
 
@@ -331,9 +463,9 @@ export class HorrorGameEngine {
   private initDustMotes() {
     this.dustPositions = new Float32Array(this.dustCount * 3);
     for (let i = 0; i < this.dustCount; i++) {
-      this.dustPositions[i * 3 + 0] = (Math.random() - 0.5) * 26;
+      this.dustPositions[i * 3 + 0] = (Math.random() - 0.5) * 14;
       this.dustPositions[i * 3 + 1] = 0.25 + Math.random() * 3.1;
-      this.dustPositions[i * 3 + 2] = -21 + Math.random() * 38;
+      this.dustPositions[i * 3 + 2] = 15.2 + (Math.random() - 0.5) * 14;
     }
     this.dustGeo = new THREE.BufferGeometry();
     this.dustGeo.setAttribute(
@@ -342,7 +474,7 @@ export class HorrorGameEngine {
     );
     this.dustMat = new THREE.PointsMaterial({
       color: 0xc2c8cc,
-      size: 0.035,
+      size: 0.036,
       transparent: true,
       opacity: 0.34,
       depthWrite: false,
@@ -351,27 +483,63 @@ export class HorrorGameEngine {
     this.scene.add(this.dustPoints);
   }
 
-  private updateAtmosphere(dt: number) {
+  private updateAtmosphere(dt: number, tensionIntensity = 0.08) {
     this.elapsed += dt;
+
+    const malfunction = this.supernatural.getActiveFlickerOverride();
 
     for (let i = 0; i < this.flickerFixtures.length; i++) {
       const f = this.flickerFixtures[i];
+      if (this.settings.disableFlashes) {
+        // Gentle steady lighting without strobe/flicker drops
+        const gentle = malfunction && malfunction.fixture === f ? 0.72 : 0.96;
+        f.light.intensity = f.baseIntensity * gentle;
+        f.bulbMat.emissiveIntensity = 1.3 * gentle;
+        continue;
+      }
+
       const wave =
         Math.sin(this.elapsed * f.flickerSpeed + f.phase) *
         Math.sin(this.elapsed * (f.flickerSpeed * 2.3) + f.phase * 1.7);
-      const drop = wave > 0.82 ? 0.36 : 1.0 - Math.max(0, wave) * 0.14;
+      let drop = wave > 0.84 ? 0.42 : 1.0 - Math.max(0, wave) * 0.14;
+      if (malfunction && malfunction.fixture === f) {
+        drop = malfunction.multiplier;
+      }
       f.light.intensity = f.baseIntensity * drop;
       f.bulbMat.emissiveIntensity = 1.35 * drop;
     }
 
+    // Smooth atmospheric fog & ambient darkening with tension and basement descent
+    const inBasement = this.controller ? this.controller.position.y < -0.5 : false;
+    const targetFogDensity = 0.035 + tensionIntensity * 0.015 + (inBasement ? 0.008 : 0);
+    this.fog.density = THREE.MathUtils.damp(this.fog.density, targetFogDensity, 3, dt);
+    const targetHemi = Math.max(0.11, 0.24 - tensionIntensity * 0.09 - (inBasement ? 0.05 : 0));
+    this.hemiLight.intensity = THREE.MathUtils.damp(this.hemiLight.intensity, targetHemi, 3, dt);
+
+    // Keep dust particles gently drifting around the active camera wing (including basement)
     if (this.dustGeo) {
+      const cx = this.camera.position.x;
+      const cz = this.camera.position.z;
       const attr = this.dustGeo.getAttribute('position') as THREE.BufferAttribute;
       for (let i = 0; i < this.dustCount; i++) {
-        let y = this.dustPositions[i * 3 + 1];
-        y += Math.sin(this.elapsed * 0.6 + i) * 0.08 * dt;
-        if (y > 3.4) y = 0.3;
-        if (y < 0.2) y = 3.2;
-        this.dustPositions[i * 3 + 1] = y;
+        let px = this.dustPositions[i * 3 + 0];
+        let py = this.dustPositions[i * 3 + 1];
+        let pz = this.dustPositions[i * 3 + 2];
+
+        if (Math.abs(px - cx) > 9) {
+          px = cx + (Math.random() - 0.5) * 16;
+        }
+        if (Math.abs(pz - cz) > 9) {
+          pz = cz + (Math.random() - 0.5) * 16;
+        }
+        const floorY = floorHeightAt(px, pz);
+        py += Math.sin(this.elapsed * 0.6 + i) * 0.08 * dt;
+        if (py > floorY + 3.4 || py < floorY + 0.15) {
+          py = floorY + 0.25 + Math.random() * 2.9;
+        }
+        this.dustPositions[i * 3 + 0] = px;
+        this.dustPositions[i * 3 + 1] = py;
+        this.dustPositions[i * 3 + 2] = pz;
       }
       attr.needsUpdate = true;
     }
@@ -394,6 +562,19 @@ export class HorrorGameEngine {
       : value < 30
         ? '#d97706'
         : '#d6d3cd';
+  }
+
+  private updateVignetteDom(tensionIntensity: number, attacking: boolean) {
+    if (!this.vignetteEl) return;
+    const edgeAlpha = attacking
+      ? 0.9
+      : Math.min(0.88, 0.68 + tensionIntensity * 0.2);
+    const redTint = attacking
+      ? 'rgba(72, 6, 8, 0.72)'
+      : tensionIntensity > 0.55
+        ? `rgba(${Math.round(35 + tensionIntensity * 28)}, 4, 6, ${(0.25 + (tensionIntensity - 0.55) * 0.55).toFixed(2)})`
+        : `rgba(3, 4, 6, ${edgeAlpha.toFixed(2)})`;
+    this.vignetteEl.style.background = `radial-gradient(circle at 50% 50%, rgba(0,0,0,0) 48%, ${redTint} 100%)`;
   }
 
   private broadcastHud(
@@ -461,53 +642,202 @@ export class HorrorGameEngine {
     const dt = clampDelta(rawDt);
 
     if (this.status === 'title') {
-      this.updateAtmosphere(dt);
+      this.updateAtmosphere(dt, 0.08);
       this.updateTitleCamera();
     } else if (this.status === 'playing') {
-      this.updateAtmosphere(dt);
-      this.collectibles.update(this.elapsed);
+      if (this.attackSequenceActive) {
+        // 0.58s animated 3D monster attack lunge + camera jolt before showing defeat modal
+        this.attackElapsed += dt;
+        const progress = Math.min(1, this.attackElapsed / ATTACK_DURATION);
 
-      if (this.notificationTimer > 0) {
-        this.notificationTimer = Math.max(0, this.notificationTimer - dt);
-        if (this.notificationTimer === 0) {
-          this.activeNotification = null;
+        this.updateAtmosphere(dt, 1.0);
+        this.watcher.animateAttack(dt, progress, this.controller.position);
+
+        // Smoothly pull camera gaze onto the lunging creature's upper torso/head with controlled jolt
+        this.lookTargetVec.set(
+          this.watcher.position.x,
+          this.watcher.position.y + 2.25,
+          this.watcher.position.z,
+        );
+        this.lookMatrix.lookAt(this.camera.position, this.lookTargetVec, this.upVec);
+        this.lookQuatTarget.setFromRotationMatrix(this.lookMatrix);
+        this.camera.quaternion.slerp(this.lookQuatTarget, 1 - Math.exp(-16 * dt));
+
+        if (!this.settings.reducedCameraMotion) {
+          this.camera.rotateZ(Math.sin(this.attackElapsed * 42) * 0.032 * (1 - progress * 0.5));
         }
-      }
+        this.updateVignetteDom(1.0, true);
 
-      const { zoneName } = this.controller.update(
-        dt,
-        this.camera,
-        this.colliders,
-      );
-
-      if (this.controller.consumeFlashlightPressed()) {
-        this.flashlight.toggle();
-      }
-      this.flashlight.update(dt);
-
-      // Update camera world matrix before raycasting for exact same-frame targeting
-      this.camera.updateMatrixWorld();
-      let prompt = this.interactions.evaluate(this.camera);
-
-      if (this.controller.consumeInteractPressed()) {
-        if (this.interactions.triggerActive()) {
-          prompt = this.interactions.evaluate(this.camera);
+        if (this.attackElapsed >= ATTACK_DURATION) {
+          this.attackSequenceActive = false;
+          this.setStatus('captured');
+          this.callbacks.onCapture();
         }
-      }
-      // Note opening must stop the enemy in this same frame.
-      this.doorSystem.update(dt, this.watcher.active ? [this.controller.position, this.watcher.position] : [this.controller.position]);
-      this.scene.updateMatrixWorld(true);
-      if (this.status === 'playing') this.watcher.update(dt,this.camera,this.controller.position,this.inventory.getSnapshot().keysCollected);
+      } else {
+        const invSnap = this.inventory.getSnapshot();
+        const watcherDist = this.watcher.active
+          ? Math.hypot(
+              this.watcher.position.x - this.controller.position.x,
+              this.watcher.position.z - this.controller.position.z,
+            )
+          : 40;
 
-      this.updateStaminaDom(
-        this.controller.stamina.value,
-        this.controller.stamina.exhausted,
-      );
-      this.broadcastHud(false, zoneName, prompt);
+        const tensionSnap = this.tension.update({
+          dt,
+          watcherActive: this.watcher.active,
+          watcherDistance: watcherDist,
+          watcherState: this.watcher.state,
+          timeSinceLastSeen: this.watcher.timeSinceLastSeen,
+          keysCollected: invSnap.keysCollected,
+          isSprinting: this.controller.isSprinting,
+        });
+
+        this.updateAtmosphere(dt, tensionSnap.intensity);
+        this.collectibles.update(this.elapsed);
+
+        if (this.notificationTimer > 0) {
+          this.notificationTimer = Math.max(0, this.notificationTimer - dt);
+          if (this.notificationTimer === 0) {
+            this.activeNotification = null;
+          }
+        }
+
+        this.cameraTrauma = Math.max(0, this.cameraTrauma - dt * 1.4);
+
+        const { zoneName } = this.controller.update(
+          dt,
+          this.camera,
+          this.colliders,
+          {
+            reducedMotion: this.settings.reducedCameraMotion,
+            trauma: this.cameraTrauma,
+            chaseIntensity: tensionSnap.chaseActive ? tensionSnap.intensity : 0,
+            elapsed: this.elapsed,
+          },
+        );
+
+        if (this.controller.consumeFlashlightPressed()) {
+          this.flashlight.toggle();
+        }
+        this.flashlight.update(dt);
+
+        // Update camera world matrix before raycasting for exact same-frame targeting
+        this.camera.updateMatrixWorld();
+        let prompt = this.interactions.evaluate(this.camera);
+
+        if (this.controller.consumeInteractPressed()) {
+          if (this.interactions.triggerActive()) {
+            prompt = this.interactions.evaluate(this.camera);
+          }
+        }
+
+        // Note opening must stop the enemy in this same frame.
+        this.doorSystem.update(
+          dt,
+          this.watcher.active
+            ? [this.controller.position, this.watcher.position]
+            : [this.controller.position],
+        );
+        this.scene.updateMatrixWorld(true);
+
+        if (this.status === 'playing') {
+          this.watcher.update(
+            dt,
+            this.camera,
+            this.controller.position,
+            invSnap.keysCollected,
+          );
+
+          // Occasional monster growls while active and unseen / pursuing
+          if (
+            this.watcher.active &&
+            this.watcher.state !== 'FROZEN' &&
+            this.watcher.state !== 'ATTACK'
+          ) {
+            this.growlTimer -= dt;
+            if (this.growlTimer <= 0) {
+              this.growlTimer = this.watcher.state === 'CHASE' ? 7 + Math.random() * 5 : 11 + Math.random() * 8;
+              if (watcherDist < 22) {
+                this.spatialAudio.playMonsterGrowl(
+                  this.watcher.position,
+                  this.controller.position,
+                  this.colliders,
+                  this.watcher.state === 'CHASE',
+                );
+              }
+            }
+          }
+
+          // Supernatural Events & Controlled Jumpscares
+          this.supernatural.update({
+            dt,
+            active: !this.attackSequenceActive,
+            camera: this.camera,
+            playerPos: this.controller.position,
+            playerYaw: this.controller.yaw,
+            doors: this.doorSystem.doors,
+            flickerFixtures: this.flickerFixtures,
+            colliders: this.colliders,
+            watcher: this.watcher,
+            audio: this.spatialAudio,
+            tensionLevel: tensionSnap.level,
+            disableFlashes: this.settings.disableFlashes,
+            onTensionSpike: (amt) => this.tension.addEventSpike(amt),
+          });
+
+          this.jumpscares.update({
+            dt,
+            status: this.status,
+            camera: this.camera,
+            playerPos: this.controller.position,
+            playerYaw: this.controller.yaw,
+            doors: this.doorSystem.doors,
+            colliders: this.colliders,
+            audio: this.spatialAudio,
+            tensionLevel: tensionSnap.level,
+            watcherState: this.watcher.state,
+            onTensionSpike: (amt) => this.tension.addEventSpike(amt),
+          });
+
+          const flinch = this.jumpscares.consumeCameraFlinch();
+          if (flinch > 0) {
+            this.cameraTrauma = Math.min(1, this.cameraTrauma + flinch);
+          }
+
+          this.spatialAudio.update({
+            dt,
+            elapsed: this.elapsed,
+            active: true,
+            camera: this.camera,
+            watcherActive: this.watcher.active,
+            watcherPos: this.watcher.position,
+            watcherState: this.watcher.state,
+            tensionLevel: tensionSnap.level,
+            tensionIntensity: tensionSnap.intensity,
+            exhausted: this.controller.stamina.exhausted,
+            colliders: this.colliders,
+          });
+
+          this.updateVignetteDom(tensionSnap.intensity, false);
+        }
+
+        this.updateStaminaDom(
+          this.controller.stamina.value,
+          this.controller.stamina.exhausted,
+        );
+        this.broadcastHud(false, zoneName, prompt);
+      }
     }
 
     this.renderer.render(this.scene, this.camera);
-    this.qa?.update(rawDt,this.watcher.active ? this.watcher.state : 'INACTIVO',this.watcher.position.x,this.watcher.position.z,this.renderer.info.render.calls,this.renderer.info.render.triangles);
+    this.qa?.update(
+      rawDt,
+      this.watcher.active ? this.watcher.state : 'INACTIVO',
+      this.watcher.position.x,
+      this.watcher.position.z,
+      this.renderer.info.render.calls,
+      this.renderer.info.render.triangles,
+    );
 
     if (this.isSoftwareGl) {
       this.afterDraw(this.tick);
@@ -588,6 +918,8 @@ export class HorrorGameEngine {
       );
     }
     this.qa?.dispose();
+    this.spatialAudio.dispose();
+    this.jumpscares.dispose();
     this.watcher?.dispose();
     this.controller?.dispose();
     this.flashlight?.dispose();

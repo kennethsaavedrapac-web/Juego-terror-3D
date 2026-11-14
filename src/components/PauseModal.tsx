@@ -1,12 +1,17 @@
 import type { FC } from 'react';
+import type { AccessibilitySettings } from '../game/types';
 
 interface PauseModalProps {
+  settings: AccessibilitySettings;
+  onUpdateSettings: (next: AccessibilitySettings) => void;
   onResume: () => void;
   onRestart: () => void;
   onReturnToTitle: () => void;
 }
 
 export const PauseModal: FC<PauseModalProps> = ({
+  settings,
+  onUpdateSettings,
   onResume,
   onRestart,
   onReturnToTitle,
@@ -14,7 +19,7 @@ export const PauseModal: FC<PauseModalProps> = ({
   return (
     <div
       className="fixed inset-0 z-30 flex items-center justify-center px-6 pointer-events-auto"
-      style={{ backgroundColor: 'rgba(5, 6, 9, 0.84)' }}
+      style={{ backgroundColor: 'rgba(5, 6, 9, 0.86)' }}
       role="dialog"
       aria-modal="true"
       aria-labelledby="pause-title"
@@ -27,10 +32,10 @@ export const PauseModal: FC<PauseModalProps> = ({
           Pausa
         </h2>
         <p className="mt-2 text-xs tracking-wide text-[#948e84]">
-          Fase 3 · Linterna, notas y llaves
+          Fase 5 · Terror psicológico y audio 3D
         </p>
 
-        <div className="mt-7 flex flex-col gap-3">
+        <div className="mt-6 flex flex-col gap-3">
           <button
             type="button"
             onClick={onResume}
@@ -54,7 +59,41 @@ export const PauseModal: FC<PauseModalProps> = ({
           </button>
         </div>
 
-        <div className="mt-6 border-t border-white/10 pt-4 text-[11px] leading-relaxed text-[#847e74]">
+        <fieldset className="mt-6 border border-white/10 bg-[#090b10] p-3.5 text-left">
+          <legend className="px-1.5 text-[10px] font-semibold tracking-[0.16em] text-[#8d877d] uppercase">
+            Comodidad visual
+          </legend>
+          <label className="flex cursor-pointer items-center justify-between gap-3 py-1.5 text-xs text-[#d6d3cd]">
+            <span>Reducir movimiento de cámara</span>
+            <input
+              type="checkbox"
+              checked={settings.reducedCameraMotion}
+              onChange={(e) =>
+                onUpdateSettings({
+                  ...settings,
+                  reducedCameraMotion: e.target.checked,
+                })
+              }
+              className="h-4 w-4 accent-[#b91c1c]"
+            />
+          </label>
+          <label className="mt-1 flex cursor-pointer items-center justify-between gap-3 py-1.5 text-xs text-[#d6d3cd]">
+            <span>Desactivar destellos ambientales</span>
+            <input
+              type="checkbox"
+              checked={settings.disableFlashes}
+              onChange={(e) =>
+                onUpdateSettings({
+                  ...settings,
+                  disableFlashes: e.target.checked,
+                })
+              }
+              className="h-4 w-4 accent-[#b91c1c]"
+            />
+          </label>
+        </fieldset>
+
+        <div className="mt-5 border-t border-white/10 pt-4 text-[11px] leading-relaxed text-[#847e74]">
           WASD: Mover · Shift: Correr · F: Linterna · E: Interactuar · Esc / P: Pausa
         </div>
       </div>
