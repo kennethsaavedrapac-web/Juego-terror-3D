@@ -1,3 +1,4 @@
+import { floorHeightAt } from './expansion';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { InventoryManager } from './inventory';
@@ -161,12 +162,12 @@ test('sprint speed exceeds walk speed', () => {
   assert.ok(Math.abs(sprint.speed - SPRINT_SPEED) < 0.05);
 });
 
-test('all 8 building rooms are reachable via 2D grid BFS and perimeter is sealed', () => {
+test('all 16 building rooms are reachable via 2D grid BFS and perimeter is sealed', () => {
   // Build a 0.5m resolution passability grid with static colliders (doors open)
   const colliders = buildStaticColliders();
-  const minX = -14;
-  const maxX = 14;
-  const minZ = -23;
+  const minX = -28;
+  const maxX = 28;
+  const minZ = -33;
   const maxZ = 19;
   const step = 0.5;
   const cols = Math.round((maxX - minX) / step) + 1;
@@ -200,7 +201,7 @@ test('all 8 building rooms are reachable via 2D grid BFS and perimeter is sealed
     const wx = minX + col * step;
     const wz = minZ + row * step;
 
-    if (wx < -13.1 || wx > 13.1 || wz < -22.1 || wz > 18.1) {
+    if (!BUILDING_ROOMS.some(r => wx >= r.minX && wx <= r.maxX && wz >= r.minZ && wz <= r.maxZ)) {
       escapedPerimeter = true;
     }
 
@@ -310,6 +311,6 @@ test('all Phase 3 keys, notes, and examinables sit inside valid named rooms', ()
   for (const item of [...BUILDING_KEYS, ...BUILDING_NOTES, ...BUILDING_EXAMINABLES]) {
     const room = getRoomAt(item.x, item.z);
     assert.notEqual(room, 'Edificio abandonado', `${item.id} must be inside a room`);
-    assert.ok(item.y > 0.5 && item.y < 2.2, `${item.id} must rest on a surface`);
+    assert.ok(item.y - floorHeightAt(item.x,item.z) > 0.5 && item.y - floorHeightAt(item.x,item.z) < 2.2, `${item.id} must rest on a surface`);
   }
 });

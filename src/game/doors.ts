@@ -11,6 +11,7 @@ export interface DoorRuntime {
   pivot: THREE.Group;
   leaf: THREE.Mesh;
   collider: AABBCollider;
+  leafCollider: AABBCollider;
   isOpen: boolean;
   currentAngle: number;
   targetAngle: number;
@@ -32,7 +33,7 @@ export interface DoorSystem {
     onFeedback: (msg: string, tone?: 'neutral' | 'alert') => void,
     exitHooks: ExitDoorHooks,
   ) => void;
-  update: (dt: number) => void;
+  update: (dt: number, occupants?: readonly THREE.Vector3[]) => void;
   reset: () => void;
   dispose: () => void;
 }
@@ -199,13 +200,15 @@ export function createDoorSystem(
     group.add(doorwayGroup);
 
     const collider = getDoorClosedCollider(def);
-    colliders.push(collider);
+    const leafCollider: AABBCollider = { ...collider, id: `${def.id}-leaf` };
+    colliders.push(collider, leafCollider);
 
     doors.push({
       def,
       pivot,
       leaf,
       collider,
+      leafCollider,
       isOpen: false,
       currentAngle: 0,
       targetAngle: 0,
@@ -421,9 +424,11 @@ export function createDoorSystem(
     });
   };
 
-  const update = (dt: number) => {
+  const bounds = new THREE.Box3();
+  const update = (dt: number, occupants: readonly THREE.Vector3[] = []) => {
     for (let i = 0; i < doors.length; i++) {
       const d = doors[i];
+      const previousAngle = d.currentAngle;
       const diff = d.targetAngle - d.currentAngle;
       if (Math.abs(diff) > 0.002) {
         d.currentAngle = THREE.MathUtils.damp(d.currentAngle, d.targetAngle, 9.5, dt);
@@ -432,7 +437,16 @@ export function createDoorSystem(
         d.currentAngle = d.targetAngle;
         d.pivot.rotation.y = d.currentAngle;
       }
-      d.collider.active = Math.abs(d.currentAngle) < 0.38;
+      d.leaf.updateWorldMatrix(true, false);
+      bounds.setFromObject(d.leaf);
+      const proposed = { ...d.leafCollider, minX: bounds.min.x, maxX: bounds.max.x, minZ: bounds.min.z, maxZ: bounds.max.z, active: true };
+      const closingGate = Math.abs(d.currentAngle) < 1.25 && Math.abs(previousAngle) >= 1.25;
+      if (occupants.some(p => !canDoorCloseSafely(p.x,p.z,proposed,.46) || (closingGate && !canDoorCloseSafely(p.x,p.z,d.collider,.46)))) {
+        d.currentAngle = previousAngle; d.pivot.rotation.y = previousAngle;
+        d.leaf.updateWorldMatrix(true, false); bounds.setFromObject(d.leaf);
+      }
+      Object.assign(d.leafCollider,{ minX: bounds.min.x, maxX: bounds.max.x, minZ: bounds.min.z, maxZ: bounds.max.z, active: true });
+      d.collider.active = Math.abs(d.currentAngle) < 1.25;
     }
 
     const exitDiff = exitTargetAngle - exitCurrentAngle;
@@ -456,6 +470,7 @@ export function createDoorSystem(
       d.targetAngle = 0;
       d.pivot.rotation.y = 0;
       d.collider.active = true;
+      Object.assign(d.leafCollider, getDoorClosedCollider(d.def), { id: `${d.def.id}-leaf` });
     }
     exitUnlocked = false;
     exitCurrentAngle = 0;

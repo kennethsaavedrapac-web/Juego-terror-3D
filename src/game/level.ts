@@ -1,3 +1,4 @@
+import { buildExpansionVisuals } from './expansionVisuals';
 import * as THREE from 'three';
 import {
   createCollectiblesSystem,
@@ -139,7 +140,7 @@ export function buildAbandonedBuilding(
   );
 
   // 1. Main Building Floor & Ceiling
-  const floorGeo = trackGeo(new THREE.PlaneGeometry(30, 44));
+  const floorGeo = trackGeo(new THREE.PlaneGeometry(26, 44));
   const floorMesh = new THREE.Mesh(floorGeo, floorMat);
   floorMesh.rotation.x = -Math.PI / 2;
   floorMesh.position.set(0, 0, -2.0);
@@ -186,6 +187,10 @@ export function buildAbandonedBuilding(
     return geo;
   };
 
+  const expansion = buildExpansionVisuals(textures);
+  group.add(expansion.group);
+  occlusionMeshes.push(...expansion.occluders);
+
   // 2. Build all walls from mapData.ts
   for (const wDef of BUILDING_WALLS) {
     const minX = Math.min(wDef.x1, wDef.x2);
@@ -208,9 +213,7 @@ export function buildAbandonedBuilding(
     mesh.castShadow = enableShadows;
     mesh.receiveShadow = enableShadows;
     group.add(mesh);
-    if (wDef.collides !== false) {
-      occlusionMeshes.push(mesh);
-    }
+    occlusionMeshes.push(mesh);
 
     if (!wDef.yOffset) {
       const baseGeo = trackGeo(new THREE.BoxGeometry(w + 0.03, 0.14, d + 0.03));
@@ -361,11 +364,11 @@ export function buildAbandonedBuilding(
   // 2. Pasillo principal flickering fluorescent
   addCeilingFixture(0, 1.5, 0xb2cbd4, 2.9, 14, 11.2, 1.7);
   // 3. Oficina / Archivos west wing warm-amber bulb
-  addCeilingFixture(-7.4, 2.8, 0xd8a876, 2.8, 14, 3.6, 2.9);
+  addCeilingFixture(-20, 2.8, 0xd8a876, 4.2, 18, 3.6, 2.9);
   // 4. Almacén / Mantenimiento east wing industrial cold lamp
-  addCeilingFixture(7.8, 1.6, 0x9cbdb8, 2.8, 14, 6.2, 1.1);
+  addCeilingFixture(21, 1.6, 0x9cbdb8, 4.2, 18, 6.2, 1.1);
   // 5. Baños / North hallway sickly teal fluorescent
-  addCeilingFixture(5.4, -10.2, 0x8cc2b0, 2.8, 14, 9.8, 4.3);
+  addCeilingFixture(20, -10.2, 0xbad4e3, 4.2, 18, 9.8, 4.3);
   // 6. North Exit crimson emergency beacon
   const exitLight = new THREE.PointLight(0xdc2626, 4.4, 14, 1.5);
   exitLight.position.set(0, 2.85, -20.6);
@@ -399,6 +402,7 @@ export function buildAbandonedBuilding(
     spawnPosition: new THREE.Vector3(SPAWN_POINT.x, 0, SPAWN_POINT.z),
     spawnYaw: SPAWN_POINT.yaw,
     dispose: () => {
+      expansion.dispose();
       doorSystem.dispose();
       collectibles.dispose();
       builtProps.dispose();

@@ -1,3 +1,4 @@
+import { floorHeightAt } from './expansion';
 import * as THREE from 'three';
 import type { BuildingTextures } from './textures';
 import type { PropPlacementDef } from './types';
@@ -135,7 +136,7 @@ export function buildBuildingProps(
 
   for (const p of placements) {
     const prop = new THREE.Group();
-    prop.position.set(p.x, 0, p.z);
+    prop.position.set(p.x, floorHeightAt(p.x, p.z), p.z);
     if (p.rotationY) prop.rotation.y = p.rotationY;
 
     switch (p.kind) {
@@ -156,6 +157,14 @@ export function buildBuildingProps(
         prop.add(makeBox(0.1, 0.45, 0.5, -0.82, 0.225, 0, darkTrimMat));
         prop.add(makeBox(0.1, 0.45, 0.5, 0.82, 0.225, 0, darkTrimMat));
         addContactShadow(prop, 2.4, 1.0);
+        break;
+      }
+
+      case 'meeting_table': {
+        prop.add(makeBox(3.8, 0.09, 1.3, 0, 0.76, 0, woodMat, true));
+        for (const x of [-1.5, 1.5]) prop.add(makeBox(0.12, 0.72, 1.1, x, 0.36, 0, darkTrimMat));
+        prop.add(makeBox(0.35, 0.025, 0.28, -0.4, 0.82, 0, paperMat));
+        addContactShadow(prop, 4.2, 1.7);
         break;
       }
 

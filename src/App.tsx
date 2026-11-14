@@ -54,6 +54,7 @@ export default function App() {
     document.body.dataset.state = statusRef.current;
 
     const engine = new HorrorGameEngine(mountEl, {
+      onCapture: () => { statusRef.current = 'captured'; setStatus('captured'); },
       onHudUpdate: (snapshot) => {
         setHud(snapshot);
       },
@@ -200,6 +201,18 @@ export default function App() {
 
       {status === 'reading' && activeNote && !webglError && (
         <NoteModal note={activeNote} onClose={handleCloseNote} />
+      )}
+
+      {status === 'captured' && !webglError && (
+        <div role="dialog" aria-modal="true" aria-labelledby="capture-title" className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-6 text-center animate-[fadeIn_.6s_ease-out]">
+          <div className="max-w-md border border-white/15 bg-[#0d1016] p-8 text-[#ece8e0]">
+            <p className="text-xs tracking-[.3em] text-red-400">THE WATCHER</p>
+            <h2 id="capture-title" className="mt-4 text-2xl">Te ha alcanzado.</h2>
+            <p className="my-6 text-sm text-stone-400">Míralo para detenerlo. Las paredes y las puertas cerradas interrumpen tu mirada.</p>
+            <button autoFocus className="border border-white/30 px-6 py-3 hover:bg-white/10" onClick={handleRestart}>Reiniciar partida</button>
+            <button className="mt-4 block w-full text-sm text-stone-400" onClick={handleReturnToTitle}>Volver al inicio</button>
+          </div>
+        </div>
       )}
 
       {status === 'paused' && !webglError && (

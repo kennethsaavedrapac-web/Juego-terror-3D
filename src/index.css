@@ -23,3 +23,5 @@
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-variant-numeric: tabular-nums;
 }
+
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }

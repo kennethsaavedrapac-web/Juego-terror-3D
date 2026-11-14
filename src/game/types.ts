@@ -1,4 +1,4 @@
-export type GameStatus = 'title' | 'playing' | 'paused' | 'reading';
+export type GameStatus = 'title' | 'playing' | 'paused' | 'reading' | 'captured';
 
 export interface AABBCollider {
   id: string;
@@ -55,6 +55,7 @@ export interface PropPlacementDef {
     | 'reception_desk'
     | 'waiting_bench'
     | 'office_desk'
+    | 'meeting_table'
     | 'office_chair'
     | 'filing_cabinet'
     | 'archive_shelf'
@@ -153,6 +154,7 @@ export interface HudSnapshot {
 }
 
 export interface GameEngineCallbacks {
+  onCapture: () => void;
   onHudUpdate: (snapshot: HudSnapshot) => void;
   onOpenNote: (note: ActiveNoteData) => void;
   onPauseRequest: () => void;

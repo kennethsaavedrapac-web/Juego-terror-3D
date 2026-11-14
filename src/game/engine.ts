@@ -1,3 +1,5 @@
+import { createPhase4QA } from './phase4QA';
+import { Watcher } from './watcher';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import type { CollectiblesSystem } from './collectibles';
@@ -43,9 +45,11 @@ export class HorrorGameEngine {
   private doorSystem!: DoorSystem;
   private collectibles!: CollectiblesSystem;
   private flashlight!: FlashlightController;
+  private watcher!: Watcher;
   private interactions!: InteractionSystem;
   private inventory = new InventoryManager();
   private isSoftwareGl = false;
+  private qa?: ReturnType<typeof createPhase4QA>;
 
   private status: GameStatus = 'title';
   private frameId = 0;
@@ -112,6 +116,7 @@ export class HorrorGameEngine {
     this.status = nextStatus;
 
     if (resetRun) {
+      this.watcher.reset();
       this.inventory.reset();
       this.collectibles.reset();
       this.doorSystem.reset();
@@ -165,7 +170,7 @@ export class HorrorGameEngine {
       this.isSoftwareGl ? 0.75 : Math.min(window.devicePixelRatio || 1, 2),
     );
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
 
     const width = Math.max(1, this.container.clientWidth || window.innerWidth);
     const height = Math.max(1, this.container.clientHeight || window.innerHeight);
@@ -237,6 +242,7 @@ export class HorrorGameEngine {
           }
         },
         onOpenNote: (note) => {
+          this.setStatus('reading');
           this.callbacks.onOpenNote(note);
         },
         onExamine: (item) => {
@@ -285,6 +291,26 @@ export class HorrorGameEngine {
       },
     );
 
+    const enemyOccluders = [...level.occlusionMeshes];
+    this.doorSystem.group.traverse(child => {
+      const mesh = child as THREE.Mesh;
+      if (mesh.isMesh && (Array.isArray(mesh.material) ? mesh.material.every(m => !m.transparent) : !mesh.material.transparent)) enemyOccluders.push(child);
+    });
+    this.watcher = new Watcher(this.colliders, enemyOccluders, () => {
+      this.setStatus('captured');
+      console.info('[Watcher] Captura', { keys: this.inventory.getSnapshot().keysCollected });
+      this.callbacks.onCapture();
+    }, () => this.pushNotification('No dejes de mirarlo. Si apartas la mirada, se acerca.', 'alert', 6));
+    this.scene.add(this.watcher.model.root);
+    if (import.meta.env.DEV && new URLSearchParams(location.search).get('qa') === '1') {
+      this.qa = createPhase4QA((x,z,yaw,enemy) => {
+        this.watcher.reset();
+        this.controller.reset(new THREE.Vector3(x,0,z),yaw);
+        this.controller.update(0,this.camera,this.colliders);
+        if (enemy) { this.watcher.active=true; this.watcher.model.root.visible=true; this.watcher.position.set(0,0,-3); this.watcher.model.root.rotation.y=Math.PI; }
+      }, () => { this.controller.yaw+=Math.PI; this.controller.targetYaw=this.controller.yaw; });
+    }
+    this.scene.updateMatrixWorld(true);
     this.initDustMotes();
 
     if (!this.isSoftwareGl) {
@@ -468,7 +494,10 @@ export class HorrorGameEngine {
           prompt = this.interactions.evaluate(this.camera);
         }
       }
-      this.doorSystem.update(dt);
+      // Note opening must stop the enemy in this same frame.
+      this.doorSystem.update(dt, this.watcher.active ? [this.controller.position, this.watcher.position] : [this.controller.position]);
+      this.scene.updateMatrixWorld(true);
+      if (this.status === 'playing') this.watcher.update(dt,this.camera,this.controller.position,this.inventory.getSnapshot().keysCollected);
 
       this.updateStaminaDom(
         this.controller.stamina.value,
@@ -478,6 +507,7 @@ export class HorrorGameEngine {
     }
 
     this.renderer.render(this.scene, this.camera);
+    this.qa?.update(rawDt,this.watcher.active ? this.watcher.state : 'INACTIVO',this.watcher.position.x,this.watcher.position.z,this.renderer.info.render.calls,this.renderer.info.render.triangles);
 
     if (this.isSoftwareGl) {
       this.afterDraw(this.tick);
@@ -557,6 +587,8 @@ export class HorrorGameEngine {
         this.onContextRestored,
       );
     }
+    this.qa?.dispose();
+    this.watcher?.dispose();
     this.controller?.dispose();
     this.flashlight?.dispose();
     this.dustGeo?.dispose();

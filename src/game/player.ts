@@ -1,3 +1,4 @@
+import { floorHeightAt } from './expansion';
 import * as THREE from 'three';
 import {
   PLAYER_EYE_HEIGHT,
@@ -148,6 +149,7 @@ export class FirstPersonController {
 
     this.position.x = moved.x;
     this.position.z = moved.z;
+    this.position.y = floorHeightAt(moved.x, moved.z) + PLAYER_EYE_HEIGHT;
     this.stamina = moved.stamina;
     this.isSprinting = moved.isSprinting;
 
@@ -169,7 +171,7 @@ export class FirstPersonController {
     const rightZ = -Math.sin(this.yaw);
     camera.position.set(
       this.position.x + rightX * bob.offsetX * this.bobWeight,
-      PLAYER_EYE_HEIGHT + bob.offsetY * this.bobWeight,
+      this.position.y + bob.offsetY * this.bobWeight,
       this.position.z + rightZ * bob.offsetX * this.bobWeight,
     );
 

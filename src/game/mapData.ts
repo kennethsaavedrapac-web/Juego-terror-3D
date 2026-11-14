@@ -1,3 +1,4 @@
+import { EXPANSION_ROOMS, EXPANSION_WALLS, EXPANSION_PROPS, CLINICAL_SOLIDS } from './expansion';
 import type {
   AABBCollider,
   DoorDef,
@@ -25,6 +26,7 @@ export const SPAWN_POINT = { x: 0, z: 15.2, yaw: 0 };
  *  - North Exit Hall: Z: -22..-16, X: -6..6
  */
 export const BUILDING_ROOMS: readonly RoomDef[] = [
+  ...EXPANSION_ROOMS,
   { id: 'recepcion', name: 'Recepción', minX: -7.0, maxX: 7.0, minZ: 9.0, maxZ: 18.0 },
   { id: 'oficina', name: 'Oficina abandonada', minX: -13.0, maxX: -1.8, minZ: 1.0, maxZ: 9.0 },
   { id: 'archivos', name: 'Sala de archivos', minX: -13.0, maxX: -1.8, minZ: -12.0, maxZ: 1.0 },
@@ -141,6 +143,7 @@ export const BUILDING_DOORS: readonly DoorDef[] = [
  * All outer joints overlap by WALL_THICKNESS/2 (0.2m) so there are zero gaps.
  */
 export const BUILDING_WALLS: readonly WallSegmentDef[] = [
+  ...EXPANSION_WALLS,
   // --- RECEPCIÓN (X: -7..7, Z: 9..18) ---
   { id: 'rec-south', x1: -7.2, z1: 17.8, x2: 7.2, z2: 18.2 },
   { id: 'rec-west', x1: -7.2, z1: 8.8, x2: -6.8, z2: 18.0 },
@@ -174,7 +177,6 @@ export const BUILDING_WALLS: readonly WallSegmentDef[] = [
 
   // --- WEST WING: OFICINA ABANDONADA (X: -13..-1.8, Z: 1..9) & SALA DE ARCHIVOS (X: -13..-1.8, Z: -12..1) ---
   { id: 'west-south', x1: -13.2, z1: 8.8, x2: -6.8, z2: 9.2 },
-  { id: 'west-outer', x1: -13.2, z1: -12.2, x2: -12.8, z2: 9.2 },
   { id: 'archivos-north', x1: -13.2, z1: -12.2, x2: -1.6, z2: -11.8 },
   // Shared wall between Oficina and Archivos (door-oficina-archivos X: -9.8..-8.2)
   { id: 'oficina-archivos-l', x1: -13.0, z1: 0.8, x2: -9.8, z2: 1.2 },
@@ -184,7 +186,6 @@ export const BUILDING_WALLS: readonly WallSegmentDef[] = [
 
   // --- EAST WING: ALMACÉN (Z: 1..9), MANTENIMIENTO (Z: -6..1), BAÑOS (Z: -14..-6) ---
   { id: 'east-south', x1: 6.8, z1: 8.8, x2: 13.2, z2: 9.2 },
-  { id: 'east-outer', x1: 12.8, z1: -14.2, x2: 13.2, z2: 9.2 },
   { id: 'banos-north', x1: 1.6, z1: -14.2, x2: 13.2, z2: -13.8, material: 'tile' },
   // Shared wall Almacén / Mantenimiento (door-almacen-mantenimiento X: 8.4..10.0)
   { id: 'alm-mant-l', x1: 1.8, z1: 0.8, x2: 8.4, z2: 1.2 },
@@ -223,6 +224,7 @@ export const BUILDING_PILLARS: readonly { id: string; x: number; z: number }[] =
 ];
 
 export const BUILDING_PROPS: readonly PropPlacementDef[] = [
+  ...EXPANSION_PROPS,
   // Recepción
   {
     id: 'prop-rec-desk',
@@ -334,7 +336,7 @@ export const BUILDING_PROPS: readonly PropPlacementDef[] = [
   {
     id: 'prop-alm-rack2',
     kind: 'storage_rack',
-    x: 11.6,
+    x: 10.0,
     z: 5.2,
     colliderHalfW: 0.45,
     colliderHalfD: 1.4,
@@ -404,7 +406,7 @@ export const BUILDING_PROPS: readonly PropPlacementDef[] = [
   {
     id: 'prop-ban-stall1',
     kind: 'restroom_stall',
-    x: 11.6,
+    x: 9.8,
     z: -8.2,
     rotationY: -Math.PI / 2,
     colliderHalfW: 0.9,
@@ -413,7 +415,7 @@ export const BUILDING_PROPS: readonly PropPlacementDef[] = [
   {
     id: 'prop-ban-stall2',
     kind: 'restroom_stall',
-    x: 11.6,
+    x: 9.8,
     z: -10.2,
     rotationY: -Math.PI / 2,
     colliderHalfW: 0.9,
@@ -422,7 +424,7 @@ export const BUILDING_PROPS: readonly PropPlacementDef[] = [
   {
     id: 'prop-ban-stall3',
     kind: 'restroom_stall',
-    x: 11.6,
+    x: 9.8,
     z: -12.2,
     rotationY: -Math.PI / 2,
     colliderHalfW: 0.9,
@@ -445,19 +447,13 @@ export const BUILDING_KEYS: readonly KeyItemDef[] = [
   {
     id: 'key-oficina',
     name: 'Llave de Oficina',
-    roomId: 'oficina',
-    x: -7.96,
-    y: 0.795,
-    z: 5.18,
+    roomId: 'administracion', x: -19.4, y: 0.795, z: -9.8,
     rotationY: -0.6,
   },
   {
     id: 'key-almacen',
     name: 'Llave de Almacén',
-    roomId: 'almacen',
-    x: 6.08,
-    y: 1.2,
-    z: 3.3,
+    roomId: 'sotano', x: 25.38, y: -1.8, z: -24.1,
     rotationY: 0.25,
   },
 ];
@@ -477,7 +473,7 @@ export const BUILDING_NOTES: readonly NoteDef[] = [
     id: 'note-oficina',
     title: 'Registro del Vigilante',
     roomLabel: 'Oficina abandonada',
-    text: 'Guardé una de las llaves en el almacén antes de que cortaran la electricidad. Algo camina por el pasillo cuando apago la luz, pero se queda inmóvil en cuanto la encaro.',
+    text: 'Trasladaron las llaves de oficina a Administración y la del almacén al depósito del sótano. La escalera está al norte del ala clínica. Algo camina por el pasillo cuando apago la luz, pero se queda inmóvil en cuanto la encaro.',
     x: -9.28,
     y: 0.795,
     z: 4.8,
@@ -609,6 +605,10 @@ export function buildStaticColliders(): AABBCollider[] {
         active: true,
       });
     }
+  }
+
+  for (const p of CLINICAL_SOLIDS) {
+    list.push({ id: p.id, minX: p.x-p.w/2, maxX: p.x+p.w/2, minZ: p.z-p.d/2, maxZ: p.z+p.d/2, kind: 'prop' });
   }
 
   // Exit double door collider
