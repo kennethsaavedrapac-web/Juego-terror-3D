@@ -82,6 +82,7 @@ export class HorrorGameEngine {
   private attackElapsed = 0;
   private cameraTrauma = 0;
   private growlTimer = 8;
+  private preAttackTimer = 0;
   private readonly prevPlayerPos = new THREE.Vector3(0, 0, 15.2);
 
   private disposeLevel = () => {};
@@ -180,6 +181,7 @@ export class HorrorGameEngine {
       this.attackElapsed = 0;
       this.cameraTrauma = 0;
       this.growlTimer = 8;
+      this.preAttackTimer = 0;
       this.spatialAudio.stopDeathAmbience();
       this.watcher.reset();
       this.tension.reset();
@@ -804,7 +806,7 @@ export class HorrorGameEngine {
       });
 
       this.updateAtmosphere(dt, tensionSnap.intensity);
-      this.collectibles.update(this.elapsed);
+      this.collectibles.update(this.elapsed, this.controller.position);
 
       if (this.notificationTimer > 0) {
         this.notificationTimer = Math.max(0, this.notificationTimer - dt);
@@ -900,6 +902,25 @@ export class HorrorGameEngine {
                 this.watcher.state === 'CHASE',
               );
             }
+          }
+
+          // Menacing pre-attack cue when closing inside extreme danger radius (2.5m - 3.5m)
+          if (
+            this.watcher.state === 'CHASE' &&
+            watcherDist <= 3.5 &&
+            watcherDist > 2.65
+          ) {
+            this.preAttackTimer -= dt;
+            if (this.preAttackTimer <= 0) {
+              this.preAttackTimer = 3.0;
+              this.spatialAudio.playPreAttackWarning(
+                this.watcher.position,
+                this.controller.position,
+                this.colliders,
+              );
+            }
+          } else if (watcherDist > 4.2) {
+            this.preAttackTimer = 0;
           }
         }
 

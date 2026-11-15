@@ -271,6 +271,8 @@ export function createWatcherModel() {
     }
   };
 
+  let frozenBlend = 0;
+
   const animate = (
     dt: number,
     speed: number,
@@ -279,13 +281,43 @@ export function createWatcherModel() {
     options?: WatcherAnimateOptions,
   ) => {
     const safeDt = Math.min(Math.max(dt, 0), 0.1);
-    breathTime += safeDt;
 
     if (frozen) {
-      // Frozen keeps limb rotations locked; optional micro chest-heave only if explicitly enabled.
-      if (options?.allowFrozenMicroBreath) {
-        const heave = 1 + Math.sin(breathTime * 1.4) * 0.008;
-        torso.scale.set(heave, 1, heave);
+      if (!options || !options.allowFrozenMicroBreath) {
+        // Pure freeze with no micro-movement options keeps all joint rotations and scales completely locked
+        return;
+      }
+      // Living frozen state: root & feet stay strictly locked, but body breathes, shoulders heave,
+      // head tilts eerily toward player, and fingers subtly tense and twitch.
+      breathTime += safeDt * 1.35;
+      idleTwitchTime += safeDt;
+      const breath = Math.sin(breathTime);
+      const heaveX = 1 + breath * 0.026;
+      const heaveZ = 1 + breath * 0.038;
+      const heaveY = 1 + breath * 0.012;
+      torso.scale.set(heaveX, heaveY, heaveZ);
+
+      // Shoulders subtly rise and fall with deep breath
+      shoulders[0].position.y = 0.74 + breath * 0.014;
+      shoulders[1].position.y = 0.74 + breath * 0.014;
+
+      // Unnerving broken-angle head tilt and subtle tracking toward player
+      const lookYaw = THREE.MathUtils.clamp(options.lookYawOffset ?? 0, -0.6, 0.6);
+      const twitch = Math.sin(idleTwitchTime * 0.7) * 0.04;
+      head.rotation.y = damp(head.rotation.y, lookYaw * 0.45 + twitch, 8, safeDt);
+      head.rotation.z = damp(head.rotation.z, 0.22 + Math.sin(breathTime * 0.5) * 0.04, 8, safeDt);
+      head.rotation.x = damp(head.rotation.x, -0.05 + breath * 0.02, 8, safeDt);
+      neck.rotation.y = damp(neck.rotation.y, lookYaw * 0.25, 8, safeDt);
+      neck.rotation.z = damp(neck.rotation.z, 0.12, 8, safeDt);
+
+      // Hands and fingers subtly tense and curl like ready to strike
+      for (let i = 0; i < 2; i++) {
+        hands[i].rotation.x = damp(hands[i].rotation.x, 0.18 + breath * 0.04, 10, safeDt);
+        for (let f = 0; f < 4; f++) {
+          const fingerWave = Math.sin(breathTime * (1.4 + f * 0.4) + i * 1.8 + f);
+          const targetCurl = 0.28 + fingerWave * 0.12;
+          fingers[i][f].rotation.x = damp(fingers[i][f].rotation.x, targetCurl, 12, safeDt);
+        }
       }
       return;
     }
@@ -309,25 +341,29 @@ export function createWatcherModel() {
     const moveBlend = Math.min(1, walkBlend + runBlend);
     const isRunning = runBlend > 0.45;
 
+    // Organic breath frequency scaling: fast aggressive panting in RUN, steady in WALK, deep in IDLE
+    const breathSpeed = 1.6 * targetIdle + 2.5 * walkBlend + 4.6 * runBlend + 5.2 * attackBlend;
+    breathTime += safeDt * breathSpeed;
+    idleTwitchTime += safeDt;
+
     // Step cadence synchronized to movement speed so feet never skate
     const strideFreq =
       speed > 0.05
-        ? (isRunning ? 5.8 : 3.35) *
+        ? (isRunning ? 5.8 : 3.4) *
           Math.max(0.65, Math.min(1.65, speed / (isRunning ? 1.85 : 1.0)))
         : 0;
     if (strideFreq > 0 && attackBlend < 0.5) {
       const nextPhase = gaitPhase + safeDt * strideFreq;
       if (Math.floor(nextPhase / Math.PI) > Math.floor(gaitPhase / Math.PI)) {
         if (moveBlend > 0.25) {
-          options?.onFootstep?.(Math.min(1, 0.45 + speed * 0.35), isRunning);
+          options?.onFootstep?.(Math.min(1, 0.48 + speed * 0.35), isRunning);
         }
       }
       prevSinPhase = Math.sin(nextPhase);
       gaitPhase = nextPhase;
     }
 
-    idleTwitchTime += safeDt;
-    const breath = Math.sin(breathTime * 1.55);
+    const breath = Math.sin(breathTime);
     const twitchPulse = Math.pow(Math.max(0, Math.sin(idleTwitchTime * 0.75 + Math.sin(idleTwitchTime * 1.9))), 6);
     const idleWeight = Math.max(0, 1 - moveBlend - attackBlend);
 
@@ -335,46 +371,53 @@ export function createWatcherModel() {
     const atkEase = 1 - Math.pow(1 - atkP, 2.2);
     const atkGrab = atkP > 0.42 ? Math.sin(((atkP - 0.42) / 0.58) * Math.PI * 0.5) : 0;
 
-    // 1. Torso & Breathing & Hunch
-    const chestScale = 1 + breath * (0.018 * idleWeight + 0.025 * runBlend) + 0.04 * attackBlend;
-    torso.scale.set(chestScale, 1, chestScale);
+    // 1. Torso & Organic Breathing & Hunch
+    const chestScaleX = 1 + breath * (0.024 * idleWeight + 0.045 * runBlend + 0.022 * walkBlend) + 0.04 * attackBlend;
+    const chestScaleZ = 1 + breath * (0.035 * idleWeight + 0.065 * runBlend + 0.030 * walkBlend) + 0.05 * attackBlend;
+    const chestScaleY = 1 + breath * (0.012 * idleWeight + 0.025 * runBlend);
+    torso.scale.set(chestScaleX, chestScaleY, chestScaleZ);
+
+    // Subtle shoulder rise and fall with breathing
+    const shoulderHeave = breath * (0.012 * idleWeight + 0.024 * runBlend + 0.015 * walkBlend);
+    shoulders[0].position.y = 0.74 + shoulderHeave;
+    shoulders[1].position.y = 0.74 + shoulderHeave;
 
     const targetTorsoPitch =
-      (-0.1 - breath * 0.025) * targetIdle +
-      (-0.24 - Math.sin(gaitPhase * 2) * 0.03) * walkBlend +
-      (-0.44 - Math.sin(gaitPhase * 2) * 0.05) * runBlend +
-      (-0.36 - atkEase * 0.34) * attackBlend -
+      (-0.12 - breath * 0.025) * targetIdle +
+      (-0.28 - Math.sin(gaitPhase * 2) * 0.03) * walkBlend +
+      (-0.52 - Math.sin(gaitPhase * 2) * 0.05) * runBlend +
+      (-0.42 - atkEase * 0.38) * attackBlend -
       crouchBlend * 0.22;
 
     const targetTorsoYaw =
       Math.sin(breathTime * 0.45) * 0.04 * targetIdle +
-      Math.sin(gaitPhase) * 0.09 * walkBlend +
-      Math.sin(gaitPhase) * 0.16 * runBlend +
+      Math.sin(gaitPhase) * 0.11 * walkBlend +
+      Math.sin(gaitPhase) * 0.18 * runBlend +
       Math.sin(atkP * Math.PI * 4) * 0.06 * attackBlend;
 
     const targetTorsoRoll =
       Math.sin(breathTime * 0.32) * 0.035 * targetIdle +
-      Math.cos(gaitPhase) * 0.05 * walkBlend +
-      Math.cos(gaitPhase) * 0.08 * runBlend +
+      Math.cos(gaitPhase) * 0.06 * walkBlend +
+      Math.cos(gaitPhase) * 0.09 * runBlend +
       Math.cos(atkP * Math.PI * 3) * 0.05 * attackBlend;
 
     torso.rotation.x = damp(torso.rotation.x, targetTorsoPitch, 13, safeDt);
     torso.rotation.y = damp(torso.rotation.y, targetTorsoYaw, 13, safeDt);
     torso.rotation.z = damp(torso.rotation.z, targetTorsoRoll, 13, safeDt);
 
-    // 2. Neck & Head (unnatural tilt + player gaze tracking)
-    const lookYaw = THREE.MathUtils.clamp(options?.lookYawOffset ?? 0, -0.55, 0.55);
+    // 2. Neck & Head (unnatural tilt + predatory player gaze tracking)
+    const lookYaw = THREE.MathUtils.clamp(options?.lookYawOffset ?? 0, -0.60, 0.60);
     const lookPitch = THREE.MathUtils.clamp(options?.lookPitchOffset ?? 0, -0.35, 0.35);
 
     const targetNeckPitch =
       (0.08 + breath * 0.02) * targetIdle +
       0.18 * walkBlend +
-      0.32 * runBlend +
-      (0.28 + atkEase * 0.18) * attackBlend +
+      0.34 * runBlend +
+      (0.30 + atkEase * 0.18) * attackBlend +
       crouchBlend * 0.15;
     const targetNeckYaw = Math.sin(breathTime * 0.6) * 0.08 * targetIdle + lookYaw * 0.35;
     const targetNeckRoll =
-      (0.11 + twitchPulse * 0.16) * targetIdle -
+      (0.12 + twitchPulse * 0.16) * targetIdle -
       Math.sin(gaitPhase) * 0.04 * moveBlend +
       Math.sin(atkP * 28) * 0.05 * attackBlend;
 
@@ -387,12 +430,12 @@ export function createWatcherModel() {
       (0.18 + Math.sin(atkP * Math.PI) * 0.2) * attackBlend;
     const targetHeadYaw =
       (Math.sin(breathTime * 0.42) * 0.12 + twitchPulse * 0.18) * targetIdle +
-      lookYaw * 0.65 * (runBlend + walkBlend * 0.5 + attackBlend) +
+      lookYaw * 0.70 * (runBlend + walkBlend * 0.6 + attackBlend) +
       Math.sin(atkP * 36) * 0.07 * attackBlend;
     const targetHeadRoll =
-      (0.19 + Math.sin(breathTime * 0.7) * 0.05 + twitchPulse * 0.22) * targetIdle +
-      (0.12 + Math.cos(gaitPhase) * 0.05) * walkBlend +
-      (0.07 + Math.cos(gaitPhase) * 0.07) * runBlend -
+      (0.22 + Math.sin(breathTime * 0.7) * 0.05 + twitchPulse * 0.22) * targetIdle +
+      (0.14 + Math.cos(gaitPhase) * 0.05) * walkBlend +
+      (0.09 + Math.cos(gaitPhase) * 0.07) * runBlend -
       (0.18 + Math.sin(atkP * 14) * 0.09) * attackBlend;
 
     head.rotation.x = damp(head.rotation.x, targetHeadPitch, 14, safeDt);
@@ -414,16 +457,16 @@ export function createWatcherModel() {
 
       const hipPitch =
         0.04 * targetIdle +
-        stride * 0.34 * asym * walkBlend +
-        (stride * 0.58 * asym + 0.14) * runBlend +
+        stride * 0.36 * asym * walkBlend +
+        (stride * 0.62 * asym + 0.16) * runBlend +
         (i === 0 ? 0.24 : -0.18) * attackBlend +
         crouchBlend * 0.32;
 
       // Knee flexes backward (negative X) during swing and crouched run
       const kneePitch =
         -0.1 * targetIdle +
-        (-0.18 - lift * 0.48) * walkBlend +
-        (-0.28 - lift * 0.78) * runBlend -
+        (-0.20 - lift * 0.52) * walkBlend +
+        (-0.30 - lift * 0.84) * runBlend -
         0.22 * attackBlend -
         crouchBlend * 0.64;
 
@@ -452,11 +495,11 @@ export function createWatcherModel() {
 
     // Hips sway & height compensation for knee flexion / crouch
     const hipSwayYaw =
-      -Math.sin(gaitPhase) * 0.07 * walkBlend - Math.sin(gaitPhase) * 0.14 * runBlend;
+      -Math.sin(gaitPhase) * 0.08 * walkBlend - Math.sin(gaitPhase) * 0.16 * runBlend;
     const hipSwayRoll =
-      Math.cos(gaitPhase) * 0.04 * walkBlend + Math.cos(gaitPhase) * 0.07 * runBlend;
+      Math.cos(gaitPhase) * 0.05 * walkBlend + Math.cos(gaitPhase) * 0.08 * runBlend;
     const strideBounce = Math.abs(Math.sin(gaitPhase)) * (0.045 * walkBlend + 0.095 * runBlend);
-    const attackLungeZ = -atkEase * 0.42 * attackBlend;
+    const attackLungeZ = -atkEase * 0.44 * attackBlend;
 
     hips.rotation.y = damp(hips.rotation.y, hipSwayYaw, 12, safeDt);
     hips.rotation.z = damp(hips.rotation.z, hipSwayRoll, 12, safeDt);
@@ -478,37 +521,37 @@ export function createWatcherModel() {
       const shoulderRoll =
         side * (0.04 + breath * 0.015) * targetIdle +
         side * (0.06 + Math.cos(gaitPhase + phaseOffset) * 0.05) * walkBlend +
-        side * (0.14 + Math.cos(gaitPhase + phaseOffset) * 0.09) * runBlend +
+        side * (0.16 + Math.cos(gaitPhase + phaseOffset) * 0.09) * runBlend +
         side * (0.28 - atkGrab * 0.12) * attackBlend;
 
       const upperArmPitch =
         (0.08 + Math.sin(breathTime * 1.1 + i * 1.7) * 0.035) * targetIdle +
-        (0.12 - swing * 0.26 * asymArm) * walkBlend +
-        (0.48 - swing * 0.58 * asymArm) * runBlend +
-        (2.05 + atkEase * 0.25) * attackBlend;
+        (0.14 - swing * 0.28 * asymArm) * walkBlend +
+        (0.52 - swing * 0.62 * asymArm) * runBlend +
+        (2.10 + atkEase * 0.25) * attackBlend;
 
       const upperArmRoll =
         side * 0.05 * targetIdle +
         side * 0.08 * walkBlend +
-        side * 0.14 * runBlend -
+        side * 0.16 * runBlend -
         side * (0.34 - atkGrab * 0.32) * attackBlend;
 
       // Forearms extend aggressively toward camera, then hook inward as claws close
       const elbowPitch =
         (0.18 + Math.sin(breathTime * 1.3 + i) * 0.04) * targetIdle +
-        (0.32 + Math.max(0, -swing) * 0.22) * walkBlend +
-        (0.68 + Math.max(0, -swing) * 0.42) * runBlend +
+        (0.35 + Math.max(0, -swing) * 0.24) * walkBlend +
+        (0.72 + Math.max(0, -swing) * 0.44) * runBlend +
         (0.38 - atkEase * 0.24 + atkGrab * 0.32) * attackBlend;
 
       const handPitch =
         (0.12 + twitchPulse * 0.18) * targetIdle +
         0.16 * walkBlend +
-        0.24 * runBlend +
-        (-0.34 + atkGrab * 0.46) * attackBlend;
+        0.26 * runBlend +
+        (-0.34 + atkGrab * 0.48) * attackBlend;
 
       const handRoll =
         side * 0.08 * targetIdle +
-        side * 0.15 * runBlend +
+        side * 0.16 * runBlend +
         side * (0.32 - atkGrab * 0.28) * attackBlend;
 
       shoulders[i].rotation.z = damp(shoulders[i].rotation.z, shoulderRoll, 14, safeDt);
@@ -522,10 +565,10 @@ export function createWatcherModel() {
       for (let f = 0; f < 4; f++) {
         const fingerWave = Math.sin(breathTime * (1.8 + f * 0.45) + i * 2.1 + f);
         const targetFingerCurl =
-          (0.18 + fingerWave * 0.14) * targetIdle +
+          (0.20 + fingerWave * 0.14) * targetIdle +
           (0.28 + fingerWave * 0.08) * walkBlend +
-          0.52 * runBlend +
-          (-0.18 + atkGrab * 1.05) * attackBlend;
+          0.54 * runBlend +
+          (-0.20 + atkGrab * 1.10) * attackBlend;
         fingers[i][f].rotation.x = damp(fingers[i][f].rotation.x, targetFingerCurl, 18, safeDt);
       }
     }

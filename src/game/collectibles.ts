@@ -12,7 +12,7 @@ export interface CollectibleCallbacks {
 
 export interface CollectiblesSystem {
   group: THREE.Group;
-  update: (elapsed: number) => void;
+  update: (elapsed: number, playerPos?: { x: number; y: number; z: number }) => void;
   reset: () => void;
   dispose: () => void;
 }
@@ -20,9 +20,34 @@ export interface CollectiblesSystem {
 interface KeyRuntime {
   def: KeyItemDef;
   meshGroup: THREE.Group;
+  haloSprite: THREE.Sprite;
+  innerSprite: THREE.Sprite;
   hitBox: THREE.Mesh;
   collected: boolean;
   baseY: number;
+}
+
+function createKeyHaloTexture(): THREE.Texture {
+  if (typeof document === 'undefined') {
+    return new THREE.Texture();
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    const grad = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+    grad.addColorStop(0.0, 'rgba(255, 252, 220, 1.0)');
+    grad.addColorStop(0.18, 'rgba(255, 215, 80, 0.85)');
+    grad.addColorStop(0.42, 'rgba(235, 150, 30, 0.40)');
+    grad.addColorStop(0.72, 'rgba(180, 80, 10, 0.12)');
+    grad.addColorStop(1.0, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 128, 128);
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
 }
 
 export function createCollectiblesSystem(
@@ -56,16 +81,18 @@ export function createCollectiblesSystem(
     }),
   );
 
-  // Brass material with subtle warm glint so keys remain readable in dark rooms
-  const keyBrassMat = trackMat(
+  // Warm golden emissive material so keys radiate an unmistakably clear, eerie gold in darkness
+  const keyGoldMat = trackMat(
     new THREE.MeshStandardMaterial({
-      color: 0xd9ad4a,
-      emissive: new THREE.Color(0x5a4212),
-      emissiveIntensity: 0.55,
-      roughness: 0.28,
+      color: 0xffe277,
+      emissive: new THREE.Color(0xffa215),
+      emissiveIntensity: 0.85,
+      roughness: 0.22,
       metalness: 0.88,
     }),
   );
+
+  const haloTex = createKeyHaloTexture();
 
   const noteMat = trackMat(
     new THREE.MeshStandardMaterial({
@@ -133,33 +160,64 @@ export function createCollectiblesSystem(
     if (k.rotationY) root.rotation.y = k.rotationY;
 
     const meshGroup = new THREE.Group();
-    meshGroup.position.y = 0.018;
+    meshGroup.position.y = 0.035;
 
-    const ring = new THREE.Mesh(keyRingGeo, keyBrassMat);
+    const ring = new THREE.Mesh(keyRingGeo, keyGoldMat);
     ring.rotation.x = Math.PI / 2;
     ring.position.set(0, 0, -0.06);
     meshGroup.add(ring);
 
-    const shaft = new THREE.Mesh(keyShaftGeo, keyBrassMat);
+    const shaft = new THREE.Mesh(keyShaftGeo, keyGoldMat);
     shaft.rotation.x = Math.PI / 2;
     shaft.position.set(0, 0, 0.04);
     meshGroup.add(shaft);
 
-    const collar = new THREE.Mesh(keyCollarGeo, keyBrassMat);
+    const collar = new THREE.Mesh(keyCollarGeo, keyGoldMat);
     collar.rotation.x = Math.PI / 2;
     collar.position.set(0, 0, -0.015);
     meshGroup.add(collar);
 
-    const tooth1 = new THREE.Mesh(keyToothGeo, keyBrassMat);
+    const tooth1 = new THREE.Mesh(keyToothGeo, keyGoldMat);
     tooth1.position.set(0.015, 0, 0.085);
     meshGroup.add(tooth1);
 
-    const tooth2 = new THREE.Mesh(keyToothGeo, keyBrassMat);
+    const tooth2 = new THREE.Mesh(keyToothGeo, keyGoldMat);
     tooth2.scale.set(0.75, 1, 0.8);
     tooth2.position.set(0.012, 0, 0.058);
     meshGroup.add(tooth2);
 
     root.add(meshGroup);
+
+    // Lightweight soft glow halo billboard sprite (clearly visible in pure darkness without dynamic lights)
+    const haloMat = trackMat(
+      new THREE.SpriteMaterial({
+        map: haloTex,
+        color: 0xffd54f,
+        blending: THREE.AdditiveBlending,
+        transparent: true,
+        depthWrite: false,
+        opacity: 0.75,
+      }),
+    );
+    const haloSprite = new THREE.Sprite(haloMat);
+    haloSprite.scale.set(0.52, 0.52, 1);
+    haloSprite.position.set(0, 0.04, 0);
+    root.add(haloSprite);
+
+    const innerMat = trackMat(
+      new THREE.SpriteMaterial({
+        map: haloTex,
+        color: 0xffffff,
+        blending: THREE.AdditiveBlending,
+        transparent: true,
+        depthWrite: false,
+        opacity: 0.9,
+      }),
+    );
+    const innerSprite = new THREE.Sprite(innerMat);
+    innerSprite.scale.set(0.18, 0.18, 1);
+    innerSprite.position.set(0, 0.04, 0);
+    root.add(innerSprite);
 
     const hitBox = new THREE.Mesh(keyHitGeo, hitProxyMat);
     hitBox.position.set(0, 0.12, 0);
@@ -170,9 +228,11 @@ export function createCollectiblesSystem(
     const runtime: KeyRuntime = {
       def: k,
       meshGroup,
+      haloSprite,
+      innerSprite,
       hitBox,
       collected: false,
-      baseY: 0.018,
+      baseY: 0.025,
     };
     keyRuntimes.push(runtime);
 
@@ -191,6 +251,8 @@ export function createCollectiblesSystem(
         if (runtime.collected) return;
         runtime.collected = true;
         meshGroup.visible = false;
+        haloSprite.visible = false;
+        innerSprite.visible = false;
         hitBox.visible = false;
         playKeyPickupSound();
         callbacks.onCollectKey(k);
@@ -340,13 +402,32 @@ export function createCollectiblesSystem(
 
   return {
     group,
-    update: (elapsed: number) => {
-      // Subtle brass shimmer & gentle hover pulse on uncollected keys
-      keyBrassMat.emissiveIntensity = 0.45 + Math.sin(elapsed * 3.2) * 0.22;
+    update: (elapsed: number, playerPos?: { x: number; y: number; z: number }) => {
       for (let i = 0; i < keyRuntimes.length; i++) {
         const kr = keyRuntimes[i];
         if (!kr.collected) {
-          kr.meshGroup.position.y = kr.baseY + Math.sin(elapsed * 2.4 + i) * 0.004;
+          const dist = playerPos
+            ? Math.hypot(kr.def.x - playerPos.x, kr.def.z - playerPos.z)
+            : 10;
+          const prox = Math.max(0, Math.min(1, 1 - dist / 7.5));
+          const pulse = 0.55 + 0.35 * Math.sin(elapsed * 2.8 + i * 1.7);
+
+          // Dynamic hover floating & slow continuous rotation on its own axis
+          kr.meshGroup.position.y = kr.baseY + 0.045 + Math.sin(elapsed * 2.3 + i * 1.4) * 0.022;
+          kr.meshGroup.rotation.y = elapsed * 1.25 + i * 2.0;
+          kr.meshGroup.rotation.x = 0.38;
+
+          // Emissive intensity boost when closer
+          keyGoldMat.emissiveIntensity = 0.65 + pulse * 0.45 + prox * 0.65;
+
+          // Halo glow expansion & pulse (visible even in complete pitch darkness with flashlight OFF)
+          const haloScale = 0.46 + pulse * 0.12 + prox * 0.22;
+          kr.haloSprite.scale.set(haloScale, haloScale, 1);
+          kr.haloSprite.position.y = kr.meshGroup.position.y;
+          kr.innerSprite.position.y = kr.meshGroup.position.y;
+          kr.haloSprite.material.opacity = Math.min(1, 0.62 + pulse * 0.22 + prox * 0.25);
+          kr.innerSprite.scale.set(haloScale * 0.36, haloScale * 0.36, 1);
+          kr.innerSprite.material.opacity = Math.min(1, 0.75 + pulse * 0.22 + prox * 0.15);
         }
       }
     },
@@ -355,10 +436,13 @@ export function createCollectiblesSystem(
         const kr = keyRuntimes[i];
         kr.collected = false;
         kr.meshGroup.visible = true;
+        kr.haloSprite.visible = true;
+        kr.innerSprite.visible = true;
         kr.hitBox.visible = true;
       }
     },
     dispose: () => {
+      haloTex.dispose();
       for (const g of geometries) g.dispose();
       for (const m of materials) m.dispose();
     },

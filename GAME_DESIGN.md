@@ -101,17 +101,31 @@ El mapa está diseñado con un pasillo principal largo y **dos rutas secundarias
 - [x] **Sustos controlados (`jumpscares.ts`)**: Susto ambiental, silueta 3D en penumbra que desaparece al dejar de mirarla y susto del monstruo al capturar, con enfriamiento estricto y bloqueo total durante la lectura de notas.
 - [x] **Mejoras visuales y accesibilidad (`PauseModal.tsx`)**: Niebla y oscurecimiento dinámicos, partículas de polvo por ala/sótano y opciones persistentes para **Reducir movimiento de cámara** y **Desactivar destellos ambientales**.
 
-### Implementado — Fase 6 (Agresividad, Alcance Letal y Muerte Cinematográfica)
-- [x] **Zona de alcance letal de 360° (`watcher.ts`)**: Comprobación continua (`isInsideLethalReach`) sobre el segmento de desplazamiento del jugador (`prevPlayer -> curPlayer`) dentro de un radio físico real de **1.65 m** (acorde al radio del jugador `0.42 m`, cuerpo del monstruo `0.46 m` y alcance de brazos largos). Impide atravesar al monstruo o pasar junto a él al esprintar; las paredes, pilares y puertas cerradas bloquean estrictamente cualquier ataque.
-- [x] **Mirar no da invencibilidad (`watcher.ts`)**: Observar a THE WATCHER a distancia segura (`> 1.65 m`) lo congela al instante (`FROZEN`). Entrar en su alcance físico real (`<= 1.65 m`) desencadena `ATTACK` inmediatamente incluso si el jugador lo está mirando.
-- [x] **Separación física corporal (`resolveWatcherBodyCollision`)**: Evita que el jugador atraviese limpiamente el torso de la criatura sin contacto físico.
-- [x] **Mayor agresividad y respuesta (`WATCHER_DIFFICULTY`)**: Persecución `CHASE` automática dentro de los `5.0 m` de radio de peligro, velocidades progresivas (`1.15` → `2.95 m/s`, con repuntes de hasta `3.32 m/s` a corta distancia, por debajo del esprint y caminar del jugador), replanificación rápida al perder contacto visual y recuperación ágil ante obstáculos.
-- [x] **Secuencia cinematográfica de muerte en 4 etapas (`1.50 s`, `engine.ts` + `watcherModel.ts` + `spatialAudio.ts`)**:
-  1. Captura única (`caught`) con bloqueo total de controles, liberación del puntero e impacto sonoro inmediato.
-  2. Animación 3D articulada con giro rápido hacia la víctima, inclinación agresiva del torso, extensión de brazos y cierre de garras hacia la cámara.
-  3. Encuadre cercano de cámara libre de muros, cierre dramático de FOV e impacto controlado respetando *Reducir movimiento de cámara*.
-  4. Interferencia breve (`interferenceRef`) y oscurecimiento progresivo a negro (`blackoutRef`) sincronizados con estática y caída subgrave antes de pasar a `gameover`.
-- [x] **Pantalla original de derrota (`DeathScreen.tsx`)**: Fondo casi negro con viñeta carmesí y líneas de escaneo sutiles, texto **`NO DEBISTE ACERCARTE.`** / **`LA PRÓXIMA VEZ, MANTÉN TU DISTANCIA.`**, ambiente sonoro oscuro y botones **`REINTENTAR`** y **`MENÚ PRINCIPAL`** con reinicio íntegro sin fugas ni instancias duplicadas.
+### Implementado — Fase 6.1 (Monstruo Más Agresivo, Animaciones Realistas y Llaves Brillantes)
+- [x] **Distancia letal aumentada y calibrada (`WATCHER_LETHAL_REACH = 2.65 m`)**:
+  - `> 6.0 m`: Seguimiento y búsqueda (`STALK` / `PATROL`).
+  - `3.5 m - 6.0 m`: Amenaza creciente (`CHASE` automático, repath rápido <= `0.16 s`).
+  - `2.5 m - 3.5 m`: Peligro extremo (repunte de velocidad x1.18, postura de ataque tensa, repath ultraveloz `0.08 s` y advertencia acústica de pre-ataque).
+  - `<= 2.65 m`: **ATAQUE LETAL INMEDIATO** continuo en 360°, comprobación swept-segment (`prevPlayer -> curPlayer`) inmune al tunneling por esprint, estrictamente bloqueado por muros y puertas cerradas.
+- [x] **Regla esencial de mirada sin invencibilidad**: Mirar al monstruo a distancia segura (`> 2.65 m`) lo congela (`FROZEN`) sin desplazamiento de raíces ni pasos, pero invadir su alcance físico letal (`<= 2.65 m`) activa `ATTACK` inmediatamente incluso observándolo de frente.
+- [x] **Agresividad aumentada y reacción casi nula**:
+  - Tiempo de reacción nulo (`routeTimer = 0`) al perder contacto visual: replanificación instantánea y acometida en el mismo fotograma.
+  - Velocidades de persecución escaladas: 0 llaves (`1.75 m/s`), 1 llave (`2.35 m/s`), 2 llaves (`2.90 m/s`), 3 llaves (`3.32 m/s`, con empujes de peligro de hasta `3.92 m/s`).
+  - Trazado suave de esquinas (*corner-cutting*) y recuperación ágil de atascos (`stuckTimer > 0.15 s`).
+- [x] **Animaciones orgánicas y rig articulado vivo (`watcherModel.ts`)**:
+  - **Respiración orgánica**: Expansión torácica en 3 ejes (X/Y/Z) con frecuencias adaptativas (`1.6 rad/s` en IDLE, `2.5 rad/s` en WALK, `4.6 rad/s` en RUN, `1.3 rad/s` en FROZEN).
+  - **Elevación de hombros**: Movimiento vertical sutil de hombros al inhalar y exhalar en todos los estados.
+  - **Cabeza y cuello**: Torsiones antinaturales, espasmos predadores y seguimiento fluido de la posición de cámara del jugador (`lookYawOffset`, `lookPitchOffset`).
+  - **Brazos y manos**: Codos articulados con inercia, muñecas reactivas y dedos independientes que se contraen, relajan y forman garras amenazantes.
+  - **Torso y piernas**: Inclinación agresiva al correr (`-0.52 rad`), transferencia de peso pélvica, flexión marcada de rodillas, asimetría de zancada y pisadas niveladas con el suelo.
+  - **Estado FROZEN vivo**: Inmovilidad estricta de raíz y pies (sin deslizamiento), pero manteniendo respiración, elevación de hombros, orientación de cabeza hacia el jugador y tensión en garras.
+  - **Ataque 3D cinematográfico**: Embestida física del torso, proyección violenta de brazos hacia la cámara y cierre de garras en 1.50 s.
+- [x] **Llaves brillantes de alta visibilidad (`collectibles.ts`)**:
+  - Material `emissive` dorado/ámbar cálido (`0xffe277`, `0xffa215`) con pulsación continua de luminosidad.
+  - Halo visual mediante `Sprite` con textura procedural de gradiente radial y blending aditivo (visible en oscuridad absoluta con linterna apagada, sin coste de luces dinámicas).
+  - Levitación vertical sinusoidal y rotación lenta continua sobre su propio eje.
+  - Intensificación de brillo y halo al aproximarse el jugador (`< 7.5 m`).
+  - Eliminación limpia al recoger con la tecla E (sin objetos ni halos huérfanos) y restauración completa en reinicio.
 
 ## 6. Mapa ampliado
 
@@ -147,12 +161,12 @@ Modelo local sin descargas, de unos 2.85 m (1.7 veces la altura de ojos del juga
 
 | Llaves | Velocidad de aproximación (m/s) | Intervalo de ruta (s) |
 | --- | --- | --- |
-| 0 | 1.15 | 1.15 |
-| 1 | 1.65 | 0.80 |
-| 2 | 2.35 | 0.48 |
-| 3 | 2.95 | 0.28 |
+| 0 | 1.75 | 0.50 |
+| 1 | 2.35 | 0.35 |
+| 2 | 2.90 | 0.22 |
+| 3 | 3.32 | 0.12 |
 
-PATROL usa el 72% de esa velocidad. La velocidad base máxima (`2.95 m/s`) y el empuje de peligro (`<= 3.32 m/s`) siguen por debajo de caminar (`3.4 m/s`) y esprintar (`5.6 m/s`). Alcance letal de captura continua: **1.65 m** en 360°, mismo nivel de apoyo y segmento libre de muros, pilares o puertas cerradas, comprobado antes de congelar por mirada.
+PATROL usa el 72% de esa velocidad. La velocidad base máxima (`3.32 m/s`) con empuje de peligro cercano (`<= 3.92 m/s`) supera el caminar del jugador (`3.4 m/s`), obligando a esprintar (`5.6 m/s`) o congelar al monstruo con la mirada. Alcance letal de captura continua: **2.65 m** en 360°, mismo nivel de apoyo y segmento libre de muros, pilares o puertas cerradas, comprobado antes de congelar por mirada.
 
 ## 8. Navegación, puertas y coste
 
@@ -166,16 +180,19 @@ Las hojas abiertas conservan una caja física calculada desde su transformación
 
 Se mantienen seis luces puntuales, redistribuidas entre las alas, y la linterna. No se añadieron dependencias de producción. El audio 3D es 100% procedural Web Audio con presupuesto de voces y sin descargas externas susceptibles de 404.
 
-## 9. Validación de Fases 4, 5 y 6
+## 9. Validación de Fases 4, 5, 6 y 6.1
 
 Comandos: `npm test`, `npm run lint`, `npm run build`.
 
-La suite automatizada (`physics.test.ts`, `watcher.test.ts`, `watcherSurface.test.ts`, `phase5.test.ts`, `phase6.test.ts`) comprueba:
+La suite automatizada (`physics.test.ts`, `watcher.test.ts`, `watcherSurface.test.ts`, `phase5.test.ts`, `phase6.test.ts`, `phase6_1.test.ts`) comprueba:
 - BFS del perímetro y accesibilidad de las 16 áreas; rutas a las tres llaves.
 - A* sin penetración, puertas cerradas, hojas realmente abiertas y protección del barrido sobre ocupantes.
 - Persecución simulada por ambas alas y descenso/ascenso del sótano, sin atravesar paredes ni muebles.
-- Mirada lejana (`> 1.65 m`) que congela al instante, oclusión total/parcial y alcance letal continuo de 360° (`<= 1.65 m`) que ataca incluso al ser mirado, sin atravesar muros ni puertas cerradas, ni permitir túneles al esprintar.
+- Mirada lejana (`> 2.65 m`) que congela al instante sin desplazamiento de raíz pero con respiración y microanimaciones vivas.
+- Alcance letal continuo de 360° (`<= 2.65 m`) que ataca de inmediato incluso al ser mirado, sin atravesar muros ni puertas cerradas, ni permitir túneles al esprintar.
+- Reacción de repath inmediata (`0 s`) al perder contacto visual.
 - Jerarquía articulada completa, poses diferenciadas (`IDLE`, `WALK`, `RUN`, `FROZEN`, `ATTACK`), extensión y cierre de garras en ataque, sincronización de pisadas, consistencia a 30/120 FPS, giro progresivo, reubicación oculta, atenuación acústica por paredes, niveles de tensión 1–4, seguridad de portazos sobrenaturales, bloqueo de sustos durante lectura de notas y reinicios consecutivos limpios.
+- Tres llaves con material emissive dorado/ámbar cálido, halo visual mediante `Sprite` procedural aditivo, levitación vertical, rotación lenta, intensificación por proximidad y desaparición total en inventario.
 
 **Verificación manual recomendada en navegador y hardware objetivo:**
 - Percepción subjetiva de espacialidad HRTF con auriculares (izquierda/derecha/detrás y atenuación tras muros).

@@ -367,13 +367,11 @@ export class SpatialAudioEngine {
         );
         this.monsterFilter.frequency.setTargetAtTime(att.cutoffHz, now, 0.08);
 
-        const breathCycle = 0.55 + 0.45 * Math.sin(params.elapsed * (params.watcherState === 'CHASE' ? 3.8 : 1.7));
         const isFrozen = params.watcherState === 'FROZEN';
-        const breathBase = isFrozen
-          ? 0.014
-          : params.watcherState === 'CHASE'
-            ? 0.12
-            : 0.068;
+        const isChase = params.watcherState === 'CHASE';
+        const breathSpeed = isChase ? 4.6 : isFrozen ? 1.3 : 2.2;
+        const breathCycle = 0.50 + 0.50 * Math.sin(params.elapsed * breathSpeed);
+        const breathBase = isFrozen ? 0.028 : isChase ? 0.15 : 0.075;
         this.monsterBreathGain.gain.setTargetAtTime(
           breathBase * breathCycle * att.gainMultiplier * silenceMult,
           now,
@@ -381,7 +379,7 @@ export class SpatialAudioEngine {
         );
 
         const dist = params.camera.position.distanceTo(params.watcherPos);
-        const proxGain = dist < 14 ? (1 - dist / 14) * 0.065 : 0;
+        const proxGain = dist < 16 ? (1 - dist / 16) * 0.085 : 0;
         this.monsterDroneGain.gain.setTargetAtTime(
           proxGain * att.gainMultiplier * silenceMult,
           now,
@@ -575,6 +573,42 @@ export class SpatialAudioEngine {
       },
       1.5,
       16,
+    );
+  }
+
+  public playPreAttackWarning(
+    pos: THREE.Vector3,
+    listenerPos: THREE.Vector3,
+    colliders: readonly AABBCollider[],
+  ) {
+    if (!this.ensureInitialized() || !this.ctx) return;
+    const dur = 0.45;
+    this.playSpatialOneShot(
+      { x: pos.x, y: pos.y + 2.2, z: pos.z },
+      listenerPos,
+      colliders,
+      dur,
+      (ctx, dest, gainScale, now) => {
+        const osc = ctx.createOscillator();
+        const bp = ctx.createBiquadFilter();
+        const gain = ctx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(84, now);
+        osc.frequency.exponentialRampToValueAtTime(160, now + dur);
+        bp.type = 'bandpass';
+        bp.frequency.value = 420;
+        bp.Q.value = 3.5;
+        gain.gain.setValueAtTime(0.001, now);
+        gain.gain.linearRampToValueAtTime(0.18 * gainScale, now + 0.05);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+        osc.connect(bp);
+        bp.connect(gain);
+        gain.connect(dest);
+        osc.start(now);
+        osc.stop(now + dur + 0.02);
+      },
+      2.0,
+      20,
     );
   }
 

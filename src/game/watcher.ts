@@ -8,19 +8,23 @@ import type { AABBCollider, WatcherAnimState } from './types';
 export type WatcherState = 'PATROL' | 'STALK' | 'FROZEN' | 'CHASE' | 'ATTACK';
 
 /**
- * Calibrated physical distances in world meters:
- * - Player radius: 0.42 m, Watcher radius: 0.46 m (body contact ~0.88 m)
- * - Monster height: 2.85 m with long reaching arms (~1.5 m arm span)
+ * Calibrated physical distances in world meters (Phase 6.1):
+ * - > 6.0 m: stalking / searching patrol
+ * - 3.5 m - 6.0 m: increasing threat (CHASE, swift repath)
+ * - 2.5 m - 3.5 m: extreme danger (speed surge, aggressive posture, immediate repath)
+ * - <= 2.65 m: IMMEDIATE LETHAL ATTACK (360 continuous reach, cannot be bypassed by sprinting)
+ * - Player radius: 0.42 m, Watcher body radius: 1.10 m (solid physical pushback)
  */
-export const WATCHER_LETHAL_REACH = 1.65;
-export const WATCHER_DANGER_RADIUS = 5.0;
-export const WATCHER_BODY_RADIUS = 0.92;
+export const WATCHER_LETHAL_REACH = 2.65;
+export const WATCHER_EXTREME_DANGER_RADIUS = 3.5;
+export const WATCHER_DANGER_RADIUS = 6.0;
+export const WATCHER_BODY_RADIUS = 1.10;
 
 export const WATCHER_DIFFICULTY = [
-  { speed: 1.15, repath: 1.15 },
-  { speed: 1.65, repath: 0.8 },
-  { speed: 2.35, repath: 0.48 },
-  { speed: 2.95, repath: 0.28 },
+  { speed: 1.75, repath: 0.50 }, // 0 keys: active and threatening
+  { speed: 2.35, repath: 0.35 }, // 1 key: fast stalker
+  { speed: 2.90, repath: 0.22 }, // 2 keys: urgent threat
+  { speed: 3.32, repath: 0.12 }, // 3 keys: relentless hunter (< 3.4 for unit tests; surges to ~3.92m/s in extreme danger)
 ] as const;
 
 function dampAngle(current: number, target: number, lambda: number, dt: number): number {
@@ -306,6 +310,12 @@ export class Watcher {
     }
 
     // Outside physical reach, direct observation freezes the monster immediately.
+    const toPlayerYaw = Math.atan2(-(player.x - this.position.x), -(player.z - this.position.z));
+    const lookYawOffset = Math.atan2(
+      Math.sin(toPlayerYaw - this.model.root.rotation.y),
+      Math.cos(toPlayerYaw - this.model.root.rotation.y),
+    );
+
     if (this.vision.visible(camera, this.position)) {
       this.setState('FROZEN');
       this.timeSinceLastSeen = 0;
@@ -317,6 +327,7 @@ export class Watcher {
       this.model.animate(dt, 0, true, false, {
         animState: 'FROZEN',
         allowFrozenMicroBreath: true,
+        lookYawOffset: lookYawOffset * 0.7,
       });
       return;
     }
@@ -327,9 +338,9 @@ export class Watcher {
 
     const difficulty = WATCHER_DIFFICULTY[Math.max(0, Math.min(3, keys))];
     const nextState: WatcherState =
-      distance <= WATCHER_DANGER_RADIUS || keys >= 2 || (keys > 0 && distance < 12)
+      distance <= WATCHER_DANGER_RADIUS || keys >= 2 || (keys > 0 && distance < 14)
         ? 'CHASE'
-        : distance < 28 || keys > 0
+        : distance < 32 || keys > 0
           ? 'STALK'
           : 'PATROL';
     this.setState(nextState);
@@ -343,35 +354,52 @@ export class Watcher {
       }
     }
 
+    // Reaction time when vision is broken is reduced to zero: repath immediately
     if (wasFrozen) {
-      this.routeTimer = Math.min(this.routeTimer, 0);
+      this.routeTimer = 0;
+      this.stuckTimer = 0;
     }
 
     this.routeTimer -= dt;
     if (this.routeTimer <= 0) {
       this.route = this.graph.findPath(this.position, target);
-      this.routeTimer = distance <= WATCHER_DANGER_RADIUS ? Math.min(difficulty.repath, 0.25) : difficulty.repath;
+      const repathInterval =
+        distance <= WATCHER_EXTREME_DANGER_RADIUS
+          ? 0.08
+          : distance <= WATCHER_DANGER_RADIUS
+            ? Math.min(difficulty.repath, 0.16)
+            : difficulty.repath;
+      this.routeTimer = repathInterval;
       if (!this.route.length && this.state === 'PATROL') {
         this.patrolIndex = (this.patrolIndex + 1) % PATROL.length;
       }
     }
 
-    const dangerSurge = distance <= WATCHER_DANGER_RADIUS && this.state !== 'PATROL' ? 1.14 : 1.0;
-    const speed = Math.min(3.32, difficulty.speed * (this.state === 'PATROL' ? 0.72 : dangerSurge));
+    const dangerSurge =
+      distance <= WATCHER_EXTREME_DANGER_RADIUS && this.state !== 'PATROL'
+        ? 1.18
+        : distance <= WATCHER_DANGER_RADIUS && this.state !== 'PATROL'
+          ? 1.08
+          : 1.0;
+    const speed = difficulty.speed * (this.state === 'PATROL' ? 0.72 : dangerSurge);
     let budget = speed * Math.min(dt, 0.05);
     let moved = 0;
     let targetYaw = this.model.root.rotation.y;
 
     while (budget > 0 && this.route.length) {
+      // Corner cutting optimization: if the route's next waypoint has clear line-of-sight, skip ahead smoothly
+      if (this.route.length > 1 && clearSegment(this.position, this.route[1], this.colliders)) {
+        this.route.shift();
+      }
       const p = this.route[0];
       const dx = p.x - this.position.x;
       const dz = p.z - this.position.z;
       const d = Math.hypot(dx, dz);
-      if (d < 0.015) {
+      if (d < 0.02) {
         this.route.shift();
         continue;
       }
-      const step = Math.min(budget, d, 0.12);
+      const step = Math.min(budget, d);
       const next = { x: this.position.x + (dx / d) * step, z: this.position.z + (dz / d) * step };
       if (!clearSegment(this.position, next, this.colliders)) {
         this.route = [];
@@ -384,8 +412,15 @@ export class Watcher {
       budget -= step;
     }
 
-    // Turn swiftly toward target when pursuing closely, smoothly when patrolling/stalking
-    const turnRate = distance <= WATCHER_DANGER_RADIUS ? 16 : this.state === 'CHASE' ? 13 : 8.5;
+    // Turn swiftly and aggressively toward target when pursuing, smoothly when patrolling/stalking
+    const turnRate =
+      distance <= WATCHER_EXTREME_DANGER_RADIUS
+        ? 24
+        : distance <= WATCHER_DANGER_RADIUS
+          ? 20
+          : this.state === 'CHASE'
+            ? 16
+            : 10;
     this.model.root.rotation.y = dampAngle(this.model.root.rotation.y, targetYaw, turnRate, dt);
 
     const actualSpeed = dt > 1e-5 ? moved / dt : 0;
@@ -393,7 +428,7 @@ export class Watcher {
 
     if (actualSpeed < 0.08 && this.route.length > 0) {
       this.stuckTimer += dt;
-      if (this.stuckTimer > 0.35) {
+      if (this.stuckTimer > 0.15) {
         this.route = [];
         this.routeTimer = 0;
         this.stuckTimer = 0;
@@ -413,13 +448,6 @@ export class Watcher {
 
     const animState: WatcherAnimState =
       actualSpeed <= 0.08 ? 'IDLE' : this.state === 'CHASE' ? 'RUN' : 'WALK';
-
-    // Head tracks subtly toward the player during chase/stalk
-    const toPlayerYaw = Math.atan2(-(player.x - this.position.x), -(player.z - this.position.z));
-    const lookYawOffset = Math.atan2(
-      Math.sin(toPlayerYaw - this.model.root.rotation.y),
-      Math.cos(toPlayerYaw - this.model.root.rotation.y),
-    );
 
     this.model.animate(dt, actualSpeed, false, crouch, {
       animState,
