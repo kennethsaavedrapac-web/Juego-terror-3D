@@ -1,7 +1,19 @@
-import { FinalSequence, FACTORY_Z, FINAL_TRIGGER_Z, FINAL_MONSTER_SPEED, smooth, getFinalChaseMetrics } from './finalSequence';
+import {
+  FinalSequence,
+  FACTORY_Z,
+  FINAL_TRIGGER_Z,
+  computeFinalChaseSpeed,
+  smooth,
+  getFinalChaseMetrics,
+} from './finalSequence';
 import { buildFinalEnvironment, finalColliders } from './finalEnvironment';
 import { FinalAudio } from './finalAudio';
-import { playDoorSound, setAudioSettings } from './audio';
+import {
+  playDoorSound,
+  setAudioSettings,
+  startHeavyIronOpeningLoop,
+  stopHeavyIronOpeningLoop,
+} from './audio';
 import { createPhase4QA } from './phase4QA';
 import { Watcher, resolveWatcherBodyCollision } from './watcher';
 import * as THREE from 'three';
@@ -92,6 +104,8 @@ export class HorrorGameEngine {
 
   private attackSequenceActive = false;
   private attackElapsed = 0;
+  private screamerPeakTriggered = false;
+  private finalChaseElapsed = 0;
   private cameraTrauma = 0;
   private growlTimer = 8;
   private exhaleTimer = 1.8;
@@ -195,15 +209,18 @@ export class HorrorGameEngine {
     if (resetRun) {
       const checkpoint = nextStatus === 'playing' && this.final.checkpoint && (prevStatus === 'gameover' || prevStatus === 'paused');
       this.final.reset(checkpoint);
+      this.finalChaseElapsed = 0;
       this.qaAutoRun=false;
       if(this.buildingGroup)this.buildingGroup.visible=true;
       this.finalAudio.stop();
+      stopHeavyIronOpeningLoop();
       this.callbacks.onFinalStage?.('PLAYING');
       this.finalSet.update(-22,0,false,true);
       this.camera.far=240;
       this.fog.density=.036; this.fog.color.setHex(0x050608);
       this.attackSequenceActive = false;
       this.attackElapsed = 0;
+      this.screamerPeakTriggered = false;
       this.cameraTrauma = 0;
       this.growlTimer = 8;
       this.exhaleTimer = 1.8;
@@ -229,8 +246,18 @@ export class HorrorGameEngine {
       this.updateDeathOverlayDom(0, 0);
     }
 
-    if (nextStatus === 'ending') { this.controller.setActive(false); return; }
-    if (nextStatus === 'paused' || nextStatus === 'gameover') this.finalAudio.stop();
+    if (nextStatus === 'ending') {
+      stopHeavyIronOpeningLoop();
+      this.controller.setActive(false);
+      return;
+    }
+    if (nextStatus === 'paused' || nextStatus === 'gameover') {
+      this.finalAudio.stop();
+      stopHeavyIronOpeningLoop();
+      if (nextStatus === 'paused') {
+        this.spatialAudio.stopScreamer();
+      }
+    }
     if (nextStatus === 'playing') {
       if (prevStatus === 'paused' && this.final.stage !== 'PLAYING') this.finalAudio.setStage(this.final.stage);
       this.spatialAudio.stopDeathAmbience();
@@ -383,6 +410,33 @@ export class HorrorGameEngine {
           this.pushNotification(item.description, 'neutral', 4.4);
         },
       },
+      (material, action, pos) => {
+        if (material === 'heavy_iron') {
+          if (action === 'open_start') {
+            playDoorSound('heavy_iron', 'open_start');
+            startHeavyIronOpeningLoop();
+            if (!this.settings.reducedCameraMotion) {
+              this.cameraTrauma = Math.max(this.cameraTrauma, 0.16);
+            }
+          } else if (action === 'open_end') {
+            stopHeavyIronOpeningLoop();
+            playDoorSound('heavy_iron', 'open_end');
+            if (!this.settings.reducedCameraMotion) {
+              this.cameraTrauma = Math.max(this.cameraTrauma, 0.24);
+            }
+          } else {
+            playDoorSound('heavy_iron', action);
+          }
+          return;
+        }
+        this.spatialAudio.playSpatialDoorSound(
+          pos,
+          this.controller.position,
+          this.colliders,
+          material,
+          action,
+        );
+      },
     );
     this.scene.add(level.group);
     this.buildingGroup=level.group;
@@ -460,9 +514,12 @@ export class HorrorGameEngine {
         ) {
           return;
         }
+        this.finalAudio.duckForScreamer();
         this.finalAudio.stop();
+        stopHeavyIronOpeningLoop();
         this.attackSequenceActive = true;
         this.attackElapsed = 0;
+        this.screamerPeakTriggered = false;
         this.status = 'caught';
         this.controller.setActive(false);
         this.interactions.clearActive();
@@ -819,15 +876,27 @@ export class HorrorGameEngine {
       this.lookQuatTarget.setFromRotationMatrix(this.lookMatrix);
       this.camera.quaternion.slerp(this.lookQuatTarget, 1 - Math.exp(-18 * seqDt));
 
-      const targetFov = this.settings.reducedCameraMotion ? 66 : 60;
+      if (!this.screamerPeakTriggered && this.attackElapsed >= 0.085) {
+        this.screamerPeakTriggered = true;
+      }
+      const screamerImpulse =
+        !this.settings.reducedCameraMotion &&
+        this.attackElapsed >= 0.08 &&
+        this.attackElapsed < 0.34
+          ? Math.sin(((this.attackElapsed - 0.08) / 0.26) * Math.PI)
+          : 0;
+
+      const targetFov = (this.settings.reducedCameraMotion ? 66 : 60) - screamerImpulse * 4.2;
       if (Math.abs(this.camera.fov - targetFov) > 0.05) {
-        this.camera.fov = THREE.MathUtils.damp(this.camera.fov, targetFov, 9, seqDt);
+        this.camera.fov = THREE.MathUtils.damp(this.camera.fov, targetFov, 11, seqDt);
         this.camera.updateProjectionMatrix();
       }
 
       if (!this.settings.reducedCameraMotion) {
         const shakeDecay = Math.max(0.15, 1 - progress * 0.85);
-        this.camera.rotateZ(Math.sin(this.attackElapsed * 44) * 0.042 * shakeDecay);
+        this.camera.rotateZ(
+          Math.sin(this.attackElapsed * 44) * (0.042 * shakeDecay + screamerImpulse * 0.032),
+        );
       }
 
       this.updateVignetteDom(1.0, true);
@@ -940,6 +1009,7 @@ export class HorrorGameEngine {
         this.watcher.active
           ? [this.controller.position, this.watcher.position]
           : [this.controller.position],
+        this.settings.reducedCameraMotion,
       );
       this.scene.updateMatrixWorld(true);
 
@@ -1103,7 +1173,7 @@ export class HorrorGameEngine {
         chaseIntensity: this.final.chasing ? 0.35 + preMetrics.threatProximity * 0.65 : 0.14,
         elapsed: this.elapsed,
       });
-      this.doorSystem.update(dt, [this.controller.position]);
+      this.doorSystem.update(dt, [this.controller.position], this.settings.reducedCameraMotion);
       if (this.controller.consumeFlashlightPressed()) this.flashlight.toggle();
       this.controller.consumeInteractPressed();
       this.flashlight.update(dt);
@@ -1150,15 +1220,17 @@ export class HorrorGameEngine {
         this.camera.updateMatrixWorld();
         if (!this.watcher.vision.visible(this.camera, spawn, true)) {
           this.final.chasing = true;
+          this.finalChaseElapsed = 0;
           this.watcher.active = true;
           this.watcher.model.root.visible = true;
           this.watcher.position.copy(spawn);
-          playDoorSound('metal', 'close');
+          stopHeavyIronOpeningLoop();
+          playDoorSound('heavy_iron', 'close_slam');
           this.finalAudio.playTunnelLockdownSlam();
           this.cameraTrauma = Math.max(this.cameraTrauma, 0.45);
           this.spatialAudio.playMonsterGrowl(spawn, this.controller.position, this.colliders, true);
-          this.growlTimer = 3.2;
-          this.exhaleTimer = 1.4;
+          this.growlTimer = 2.6;
+          this.exhaleTimer = 1.2;
           this.pushNotification(
             '¡CORRE! Está furioso. Mirarlo ya no lo detiene. Mantén SHIFT.',
             'alert',
@@ -1168,21 +1240,35 @@ export class HorrorGameEngine {
       }
 
       if (this.final.chasing) {
-        this.watcher.updateFinal(
-          dt,
-          this.controller.position,
-          this.prevPlayerPos,
-          FINAL_MONSTER_SPEED,
-        );
+        this.finalChaseElapsed += dt;
         const curMetrics = getFinalChaseMetrics(
           this.controller.position.z,
           this.watcher.position.z,
           true,
           stage,
         );
+        const chaseSpeed = computeFinalChaseSpeed(
+          curMetrics.phase,
+          curMetrics.monsterDistance,
+          this.finalChaseElapsed,
+        );
+        const aggression =
+          curMetrics.phase === 'FINAL_METERS'
+            ? 1.32
+            : curMetrics.phase === 'DESPERATE_CHASE'
+              ? 1.14
+              : 1.0;
+        this.watcher.updateFinal(
+          dt,
+          this.controller.position,
+          this.prevPlayerPos,
+          chaseSpeed,
+          aggression,
+        );
         this.growlTimer -= dt;
         if (this.growlTimer <= 0) {
-          this.growlTimer = curMetrics.phase === 'FINAL_METERS' ? 2.6 : 3.6;
+          this.growlTimer =
+            curMetrics.phase === 'FINAL_METERS' || curMetrics.threatProximity > 0.65 ? 2.1 : 3.2;
           this.spatialAudio.playMonsterGrowl(
             this.watcher.position,
             this.controller.position,
@@ -1192,7 +1278,7 @@ export class HorrorGameEngine {
         }
         this.exhaleTimer -= dt;
         if (this.exhaleTimer <= 0) {
-          this.exhaleTimer = 1.4 + Math.random() * 0.7;
+          this.exhaleTimer = 1.15 + Math.random() * 0.55;
           this.spatialAudio.playMonsterExhale(
             this.watcher.position,
             this.controller.position,

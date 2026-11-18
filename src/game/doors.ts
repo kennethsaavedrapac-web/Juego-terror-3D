@@ -1,10 +1,16 @@
 import * as THREE from 'three';
-import { playDoorSound, playExitUnlockSound } from './audio';
+import { playDoorSound, stopHeavyIronOpeningLoop, type DoorAction } from './audio';
 import type { InteractionSystem } from './interactions';
 import { DOOR_HEIGHT, WALL_HEIGHT, WALL_THICKNESS, getDoorClosedCollider } from './mapData';
 import { canDoorCloseSafely } from './physics';
 import type { BuildingTextures } from './textures';
-import type { AABBCollider, DoorDef } from './types';
+import type { AABBCollider, DoorDef, DoorMaterial } from './types';
+
+export type DoorSoundCallback = (
+  material: DoorMaterial,
+  action: DoorAction,
+  pos: { x: number; y: number; z: number },
+) => void;
 
 export interface DoorRuntime {
   def: DoorDef;
@@ -15,6 +21,7 @@ export interface DoorRuntime {
   isOpen: boolean;
   currentAngle: number;
   targetAngle: number;
+  pendingCloseSlam?: boolean;
 }
 
 export interface ExitDoorHooks {
@@ -33,7 +40,7 @@ export interface DoorSystem {
     onFeedback: (msg: string, tone?: 'neutral' | 'alert') => void,
     exitHooks: ExitDoorHooks,
   ) => void;
-  update: (dt: number, occupants?: readonly THREE.Vector3[]) => void;
+  update: (dt: number, occupants?: readonly THREE.Vector3[], reducedMotion?: boolean) => void;
   reset: () => void;
   dispose: () => void;
 }
@@ -44,7 +51,21 @@ export function createDoorSystem(
   doorDefs: readonly DoorDef[],
   textures: BuildingTextures,
   enableShadows: boolean,
+  onDoorSound?: DoorSoundCallback,
 ): DoorSystem {
+  const emitDoorSound = (
+    material: DoorMaterial,
+    action: DoorAction,
+    x: number,
+    y: number,
+    z: number,
+  ) => {
+    if (onDoorSound) {
+      onDoorSound(material, action, { x, y, z });
+    } else {
+      playDoorSound(material, action);
+    }
+  };
   const group = new THREE.Group();
   const doors: DoorRuntime[] = [];
   const colliders: AABBCollider[] = [];
@@ -212,6 +233,7 @@ export function createDoorSystem(
       isOpen: false,
       currentAngle: 0,
       targetAngle: 0,
+      pendingCloseSlam: false,
     });
   }
 
@@ -340,6 +362,7 @@ export function createDoorSystem(
   let exitUnlocked = false;
   let exitCurrentAngle = 0;
   let exitTargetAngle = 0;
+  let exitAudioPhase: 0 | 1 | 2 = 0;
 
   const registerInteractions = (
     interactions: InteractionSystem,
@@ -375,23 +398,25 @@ export function createDoorSystem(
         },
         onInteract: () => {
           if (d.def.locked) {
-            playDoorSound(d.def.material, 'locked');
+            emitDoorSound(d.def.material, 'locked', d.def.x, 1.3, d.def.z);
             onFeedback(d.def.lockedMessage || 'Puerta bloqueada', 'alert');
             return;
           }
           if (d.isOpen) {
             if (!canDoorCloseSafely(playerPosition.x, playerPosition.z, d.collider)) {
-              playDoorSound(d.def.material, 'locked');
+              emitDoorSound(d.def.material, 'locked', d.def.x, 1.3, d.def.z);
               onFeedback('Aléjate del marco para cerrar la puerta', 'alert');
               return;
             }
             d.isOpen = false;
             d.targetAngle = 0;
-            playDoorSound(d.def.material, 'close');
+            d.pendingCloseSlam = true;
+            emitDoorSound(d.def.material, 'close', d.def.x, 1.3, d.def.z);
           } else {
             d.isOpen = true;
             d.targetAngle = d.def.openAngle;
-            playDoorSound(d.def.material, 'open');
+            d.pendingCloseSlam = false;
+            emitDoorSound(d.def.material, 'open', d.def.x, 1.3, d.def.z);
           }
         },
       });
@@ -422,24 +447,29 @@ export function createDoorSystem(
       onInteract: () => {
         if (exitUnlocked) return;
         if (!exitHooks.canUnlock()) {
-          playDoorSound('metal', 'locked');
+          emitDoorSound('heavy_iron', 'locked', 0, 1.3, -21.72);
           exitHooks.onLockedAttempt();
           return;
         }
         exitUnlocked = true;
+        exitAudioPhase = 0;
         exitTargetAngle = Math.PI * 0.44;
         crossbar.visible = true;
         for (const lock of padlocks) {
           lock.visible = true;
         }
-        playExitUnlockSound();
+        emitDoorSound('heavy_iron', 'unlock', 0, 1.3, -21.72);
         exitHooks.onUnlockSuccess();
       },
     });
   };
 
   const bounds = new THREE.Box3();
-  const update = (dt: number, occupants: readonly THREE.Vector3[] = []) => {
+  const update = (
+    dt: number,
+    occupants: readonly THREE.Vector3[] = [],
+    reducedMotion = false,
+  ) => {
     for (let i = 0; i < doors.length; i++) {
       const d = doors[i];
       const previousAngle = d.currentAngle;
@@ -459,11 +489,32 @@ export function createDoorSystem(
         d.currentAngle = previousAngle; d.pivot.rotation.y = previousAngle;
         d.leaf.updateWorldMatrix(true, false); bounds.setFromObject(d.leaf);
       }
+      if (d.pendingCloseSlam && !d.isOpen && Math.abs(d.currentAngle) < 0.14) {
+        d.pendingCloseSlam = false;
+        emitDoorSound(d.def.material, 'close_slam', d.def.x, 1.3, d.def.z);
+      }
       Object.assign(d.leafCollider,{ minX: bounds.min.x, maxX: bounds.max.x, minZ: bounds.min.z, maxZ: bounds.max.z, active: true });
       d.collider.active = Math.abs(d.currentAngle) < 1.25;
     }
 
-    if (exitUnlocked) exitOpeningTime = Math.min(4, exitOpeningTime + dt);
+    if (exitUnlocked) {
+      exitOpeningTime = Math.min(4, exitOpeningTime + dt);
+      if (exitAudioPhase === 0 && exitOpeningTime >= 0.8) {
+        exitAudioPhase = 1;
+        emitDoorSound('heavy_iron', 'open_start', 0, 1.3, -21.72);
+      }
+      if (exitAudioPhase === 1 && exitOpeningTime >= 3.92) {
+        exitAudioPhase = 2;
+        exitDoor.position.set(0, 0, -21.72);
+        emitDoorSound('heavy_iron', 'open_end', 0, 1.3, -21.72);
+      } else if (exitOpeningTime >= 0.8 && exitOpeningTime < 3.92 && !reducedMotion) {
+        exitDoor.position.set(
+          Math.sin(exitOpeningTime * 46) * 0.0045,
+          Math.cos(exitOpeningTime * 58) * 0.0035,
+          -21.72,
+        );
+      }
+    }
     const t = Math.max(0, Math.min(1, (exitOpeningTime - .8) / 3.2));
     exitCurrentAngle = exitTargetAngle * t*t*(3-2*t);
     exitPivotL.rotation.y = exitCurrentAngle;
@@ -479,9 +530,11 @@ export function createDoorSystem(
   };
 
   const reset = () => {
+    stopHeavyIronOpeningLoop();
     for (let i = 0; i < doors.length; i++) {
       const d = doors[i];
       d.isOpen = false;
+      d.pendingCloseSlam = false;
       d.currentAngle = 0;
       d.targetAngle = 0;
       d.pivot.rotation.y = 0;
@@ -489,6 +542,8 @@ export function createDoorSystem(
       Object.assign(d.leafCollider, getDoorClosedCollider(d.def), { id: `${d.def.id}-leaf` });
     }
     exitOpeningTime = 0;
+    exitAudioPhase = 0;
+    exitDoor.position.set(0, 0, -21.72);
     exitLeaves.forEach(c=>c.active=false);
     crossbar.position.x=0;
     exitUnlocked = false;
@@ -512,6 +567,7 @@ export function createDoorSystem(
     update,
     reset,
     dispose: () => {
+      stopHeavyIronOpeningLoop();
       for (const g of geometries) g.dispose();
       for (const m of materials) m.dispose();
     },

@@ -40,6 +40,8 @@ export interface WallSegmentDef {
   collides?: boolean;
 }
 
+export type DoorMaterial = 'wood' | 'metal' | 'heavy_iron';
+
 export interface DoorDef {
   id: string;
   label: string;
@@ -53,7 +55,7 @@ export interface DoorDef {
   hingeSide: -1 | 1;
   /** Swing direction in radians (+PI*0.48 or -PI*0.48) */
   openAngle: number;
-  material: 'wood' | 'metal';
+  material: DoorMaterial;
   locked?: boolean;
   lockedMessage?: string;
 }

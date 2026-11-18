@@ -5,7 +5,7 @@ import {
   type CollectibleCallbacks,
   type CollectiblesSystem,
 } from './collectibles';
-import { createDoorSystem, type DoorSystem } from './doors';
+import { createDoorSystem, type DoorSoundCallback, type DoorSystem } from './doors';
 import type { InteractionSystem } from './interactions';
 import {
   BUILDING_DOORS,
@@ -48,6 +48,7 @@ export function buildAbandonedBuilding(
   enableShadows: boolean,
   interactions: InteractionSystem,
   collectibleCallbacks: CollectibleCallbacks,
+  onDoorSound?: DoorSoundCallback,
 ): BuiltLevel {
   const group = new THREE.Group();
   const flickerFixtures: FlickerFixture[] = [];
@@ -272,7 +273,7 @@ export function buildAbandonedBuilding(
   }
 
   // 4. Interactive Doors System (interior doors + animated north exit double door)
-  const doorSystem = createDoorSystem(BUILDING_DOORS, textures, enableShadows);
+  const doorSystem = createDoorSystem(BUILDING_DOORS, textures, enableShadows, onDoorSound);
   group.add(doorSystem.group);
 
   // 5. Room Furniture & Abandoned Props

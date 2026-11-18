@@ -1,7 +1,12 @@
 import * as THREE from 'three';
-import { getEffectiveVolume, getSharedAudioContext } from './audio';
+import {
+  getEffectiveVolume,
+  getSharedAudioContext,
+  playDoorActionOnNode,
+  type DoorAction,
+} from './audio';
 import { segmentIntersectsAABB } from './physics';
-import type { AABBCollider, TensionLevel } from './types';
+import type { AABBCollider, DoorMaterial, TensionLevel } from './types';
 import type { WatcherState } from './watcher';
 
 export interface WallAttenuation {
@@ -83,12 +88,18 @@ export class SpatialAudioEngine {
   private playerBreathTimer = 0;
   private distantNoiseTimer = 8;
 
-  // Death Screen dark ambient drone
+  // Death Screen dark ambient drone & screamer state
   private deathDroneOsc: OscillatorNode | null = null;
   private deathDroneGain: GainNode | null = null;
   private deathNoiseSrc: AudioBufferSourceNode | null = null;
   private deathNoiseGain: GainNode | null = null;
   private deathSeqTimers: number[] = [];
+  private screamerLimiter: DynamicsCompressorNode | null = null;
+  private screamerBuffer: AudioBuffer | null = null;
+  private screamerLoadPromise: Promise<void> | null = null;
+  private activeScreamerNodes: AudioNode[] = [];
+  private activeScreamerSources: AudioScheduledSourceNode[] = [];
+  private screamerImpactTimer: number | null = null;
 
   private activeVoices = 0;
   private readonly maxVoices = 14;
@@ -120,6 +131,14 @@ export class SpatialAudioEngine {
       this.masterGain = ctx.createGain();
       this.masterGain.gain.value = 0.0;
       this.masterGain.connect(ctx.destination);
+
+      this.screamerLimiter = ctx.createDynamicsCompressor();
+      this.screamerLimiter.threshold.value = -10;
+      this.screamerLimiter.knee.value = 10;
+      this.screamerLimiter.ratio.value = 10;
+      this.screamerLimiter.attack.value = 0.002;
+      this.screamerLimiter.release.value = 0.15;
+      this.screamerLimiter.connect(this.masterGain);
 
       // 1. Ambient building electrical hum (58 Hz + subtle harmonic)
       this.ambientHumOsc = ctx.createOscillator();
@@ -192,10 +211,47 @@ export class SpatialAudioEngine {
       this.monsterDroneOsc.start();
 
       this.initialized = true;
+      void this.preloadScreamer();
       return true;
     } catch {
       return false;
     }
+  }
+
+  public preloadScreamer(): Promise<void> {
+    if (this.screamerBuffer) return Promise.resolve();
+    if (this.screamerLoadPromise) return this.screamerLoadPromise;
+    if (
+      this.disposed ||
+      !this.ctx ||
+      typeof fetch !== 'function' ||
+      typeof document === 'undefined'
+    ) {
+      return Promise.resolve();
+    }
+
+    const ctx = this.ctx;
+    const probe = document.createElement('audio');
+    const supportsOgg =
+      typeof probe.canPlayType === 'function' &&
+      probe.canPlayType('audio/ogg; codecs="vorbis"') !== '';
+    const url = supportsOgg ? '/audio/monster-screamer.ogg' : '/audio/monster-screamer.wav';
+
+    this.screamerLoadPromise = (async () => {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const arr = await res.arrayBuffer();
+        if (this.disposed) return;
+        this.screamerBuffer = await ctx.decodeAudioData(arr);
+      } catch {
+        // Fallback procedural formant screamer remains ready if decode/fetch fails
+      } finally {
+        this.screamerLoadPromise = null;
+      }
+    })();
+
+    return this.screamerLoadPromise;
   }
 
   private createPanner(
@@ -746,47 +802,210 @@ export class SpatialAudioEngine {
     this.deathSeqTimers = [];
   }
 
-  public playMonsterAttack() {
-    if (!this.ensureInitialized() || !this.ctx || !this.masterGain) return;
-    const ctx = this.ctx;
+  public stopScreamer() {
+    if (this.screamerImpactTimer !== null && typeof window !== 'undefined') {
+      window.clearTimeout(this.screamerImpactTimer);
+      this.screamerImpactTimer = null;
+    }
+    for (const src of this.activeScreamerSources) {
+      try {
+        src.stop();
+        src.disconnect();
+      } catch {
+        // Ignore already stopped sources
+      }
+    }
+    for (const node of this.activeScreamerNodes) {
+      try {
+        node.disconnect();
+      } catch {
+        // Ignore already disconnected nodes
+      }
+    }
+    this.activeScreamerSources = [];
+    this.activeScreamerNodes = [];
+  }
+
+  private triggerScreamerImpact(ctx: AudioContext, dest: AudioNode) {
+    if (this.disposed) return;
     const now = ctx.currentTime;
-    const dur = 0.85;
-    this.trackVoice(dur);
 
-    this.masterGain.gain.setTargetAtTime(0.95 * getEffectiveVolume(), now, 0.03);
-    this.fadeOutGameplayLoops();
-
-    // Heavy low impact + dissonant metallic shriek
-    for (const freq of [64, 138, 212, 435]) {
-      const osc = ctx.createOscillator();
+    if (this.screamerBuffer) {
+      const src = ctx.createBufferSource();
+      src.buffer = this.screamerBuffer;
       const gain = ctx.createGain();
-      osc.type = freq > 300 ? 'sawtooth' : freq < 90 ? 'sine' : 'triangle';
-      osc.frequency.setValueAtTime(freq, now);
-      osc.frequency.exponentialRampToValueAtTime(Math.max(24, freq * 0.44), now + dur);
-      gain.gain.setValueAtTime(freq < 90 ? 0.34 : 0.18, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
-      osc.connect(gain);
-      gain.connect(this.masterGain);
-      osc.start(now);
-      osc.stop(now + dur + 0.02);
+      gain.gain.setValueAtTime(1.05, now);
+      src.connect(gain);
+      gain.connect(dest);
+      src.start(now);
+      this.activeScreamerSources.push(src);
+      this.activeScreamerNodes.push(gain);
+      src.onended = () => {
+        try {
+          src.disconnect();
+          gain.disconnect();
+        } catch {
+          // Ignore
+        }
+      };
+      return;
     }
 
+    // Layered multi-formant horror screamer fallback (never a simple oscillator beep)
+    const dur = 1.95;
+    const bus = ctx.createGain();
+    bus.gain.setValueAtTime(0.001, now);
+    bus.gain.linearRampToValueAtTime(0.92, now + 0.018);
+    bus.gain.exponentialRampToValueAtTime(0.001, now + dur);
+
+    // Subtle tunnel slapback reverb
+    const delayA = ctx.createDelay(0.4);
+    delayA.delayTime.value = 0.085;
+    const delayFb = ctx.createGain();
+    delayFb.gain.value = 0.28;
+    const delayLp = ctx.createBiquadFilter();
+    delayLp.type = 'lowpass';
+    delayLp.frequency.value = 1650;
+
+    bus.connect(dest);
+    bus.connect(delayA);
+    delayA.connect(delayLp);
+    delayLp.connect(delayFb);
+    delayFb.connect(delayA);
+    delayLp.connect(dest);
+    this.activeScreamerNodes.push(bus, delayA, delayFb, delayLp);
+
+    // 1. Sub-bass chest-slam shockwave
+    const sub = ctx.createOscillator();
+    const subGain = ctx.createGain();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(112, now);
+    sub.frequency.exponentialRampToValueAtTime(26, now + 0.72);
+    subGain.gain.setValueAtTime(0.75, now);
+    subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.78);
+    sub.connect(subGain);
+    subGain.connect(bus);
+    sub.start(now);
+    sub.stop(now + 0.8);
+    this.activeScreamerSources.push(sub);
+    this.activeScreamerNodes.push(subGain);
+
+    // 2. Dual FM-distorted monstrous vocal cords routed through throat/mouth formants
+    const shaper = ctx.createWaveShaper();
+    shaper.curve = this.distortionCurve;
+    const f1 = ctx.createBiquadFilter();
+    f1.type = 'bandpass';
+    f1.frequency.setValueAtTime(840, now);
+    f1.frequency.exponentialRampToValueAtTime(420, now + dur);
+    f1.Q.value = 2.2;
+    const f2 = ctx.createBiquadFilter();
+    f2.type = 'bandpass';
+    f2.frequency.setValueAtTime(1760, now);
+    f2.frequency.exponentialRampToValueAtTime(920, now + dur);
+    f2.Q.value = 2.6;
+    const roarGain = ctx.createGain();
+    roarGain.gain.value = 0.52;
+    shaper.connect(f1);
+    shaper.connect(f2);
+    f1.connect(roarGain);
+    f2.connect(roarGain);
+    roarGain.connect(bus);
+    this.activeScreamerNodes.push(shaper, f1, f2, roarGain);
+
+    for (const [fStart, fPeak, fEnd] of [
+      [146, 232, 86],
+      [154, 248, 92],
+      [310, 520, 175],
+    ] as const) {
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(fStart, now);
+      osc.frequency.linearRampToValueAtTime(fPeak, now + 0.14);
+      osc.frequency.exponentialRampToValueAtTime(fEnd, now + dur * 0.9);
+      osc.connect(shaper);
+      osc.start(now);
+      osc.stop(now + dur);
+      this.activeScreamerSources.push(osc);
+    }
+
+    // 3. Shredded shriek burst noise
     if (this.noiseBuffer) {
-      const burst = ctx.createBufferSource();
-      burst.buffer = this.noiseBuffer;
-      const filter = ctx.createBiquadFilter();
-      filter.type = 'bandpass';
-      filter.frequency.setValueAtTime(1250, now);
-      filter.frequency.exponentialRampToValueAtTime(210, now + dur);
-      filter.Q.value = 1.3;
-      const gain = ctx.createGain();
-      gain.gain.setValueAtTime(0.3, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
-      burst.connect(filter);
-      filter.connect(gain);
-      gain.connect(this.masterGain);
-      burst.start(now);
-      burst.stop(now + dur);
+      const shriek = ctx.createBufferSource();
+      shriek.buffer = this.noiseBuffer;
+      const sBp = ctx.createBiquadFilter();
+      sBp.type = 'bandpass';
+      sBp.frequency.setValueAtTime(2450, now);
+      sBp.frequency.exponentialRampToValueAtTime(680, now + dur * 0.85);
+      sBp.Q.value = 1.6;
+      const sg = ctx.createGain();
+      sg.gain.setValueAtTime(0.65, now);
+      sg.gain.exponentialRampToValueAtTime(0.001, now + dur * 0.9);
+      shriek.connect(sBp);
+      sBp.connect(shaper);
+      shriek.connect(sg);
+      sg.connect(bus);
+      shriek.start(now);
+      shriek.stop(now + dur);
+      this.activeScreamerSources.push(shriek);
+      this.activeScreamerNodes.push(sBp, sg);
+    }
+  }
+
+  public playMonsterAttack() {
+    if (!this.ensureInitialized() || !this.ctx || !this.masterGain) return;
+    this.stopScreamer();
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    const dest = this.screamerLimiter || this.masterGain;
+    this.trackVoice(2.35);
+
+    this.masterGain.gain.setTargetAtTime(0.98 * getEffectiveVolume(), now, 0.02);
+    this.fadeOutGameplayLoops();
+
+    // Immediate t=0.00s capture visceral grab thud + rasp (pre-lunge shock)
+    const grabSub = ctx.createOscillator();
+    const grabGain = ctx.createGain();
+    grabSub.type = 'sine';
+    grabSub.frequency.setValueAtTime(88, now);
+    grabSub.frequency.exponentialRampToValueAtTime(24, now + 0.24);
+    grabGain.gain.setValueAtTime(0.45, now);
+    grabGain.gain.exponentialRampToValueAtTime(0.001, now + 0.26);
+    grabSub.connect(grabGain);
+    grabGain.connect(dest);
+    grabSub.start(now);
+    grabSub.stop(now + 0.28);
+    this.activeScreamerSources.push(grabSub);
+    this.activeScreamerNodes.push(grabGain);
+
+    if (this.noiseBuffer) {
+      const rasp = ctx.createBufferSource();
+      rasp.buffer = this.noiseBuffer;
+      const rBp = ctx.createBiquadFilter();
+      rBp.type = 'bandpass';
+      rBp.frequency.setValueAtTime(980, now);
+      rBp.Q.value = 1.3;
+      const rg = ctx.createGain();
+      rg.gain.setValueAtTime(0.24, now);
+      rg.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+      rasp.connect(rBp);
+      rBp.connect(rg);
+      rg.connect(dest);
+      rasp.start(now);
+      rasp.stop(now + 0.18);
+      this.activeScreamerSources.push(rasp);
+      this.activeScreamerNodes.push(rBp, rg);
+    }
+
+    // Peak screamer fires at +85ms synchronized with the creature lunging full-frame into camera
+    if (typeof window !== 'undefined') {
+      this.screamerImpactTimer = window.setTimeout(() => {
+        this.screamerImpactTimer = null;
+        if (!this.disposed && this.ctx && (this.screamerLimiter || this.masterGain)) {
+          this.triggerScreamerImpact(this.ctx, this.screamerLimiter || this.masterGain!);
+        }
+      }, 85);
+    } else {
+      this.triggerScreamerImpact(ctx, dest);
     }
   }
 
@@ -894,6 +1113,7 @@ export class SpatialAudioEngine {
 
   public stopDeathAmbience() {
     this.clearDeathSequenceTimers();
+    this.stopScreamer();
     const stopNode = (n: AudioScheduledSourceNode | null) => {
       if (!n) return;
       try {
@@ -947,46 +1167,47 @@ export class SpatialAudioEngine {
     }
   }
 
-  public playSpatialDoorSlam(
+  public playSpatialDoorSound(
     pos: { x: number; y: number; z: number },
     listenerPos: { x: number; z: number },
     colliders: readonly AABBCollider[],
-    material: 'wood' | 'metal',
+    material: DoorMaterial,
+    action: DoorAction,
   ) {
-    const dur = 0.35;
+    const dur =
+      action === 'open_end' || action === 'close_slam'
+        ? material === 'heavy_iron'
+          ? 0.9
+          : 0.45
+        : action === 'open'
+          ? 0.55
+          : 0.35;
     this.playSpatialOneShot(
       pos,
       listenerPos,
       colliders,
       dur,
-      (ctx, dest, gainScale, now) => {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = material === 'metal' ? 'square' : 'triangle';
-        osc.frequency.setValueAtTime(material === 'metal' ? 185 : 125, now);
-        osc.frequency.exponentialRampToValueAtTime(34, now + dur * 0.85);
-        gain.gain.setValueAtTime(0.32 * gainScale, now);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
-        osc.connect(gain);
-        gain.connect(dest);
-        osc.start(now);
-        osc.stop(now + dur + 0.02);
+      (ctx, dest, gainScale) => {
+        playDoorActionOnNode(ctx, dest, material, action, gainScale);
+      },
+      material === 'heavy_iron' ? 3.5 : 1.7,
+      material === 'heavy_iron' ? 38 : 22,
+    );
+  }
 
-        if (this.noiseBuffer) {
-          const n = ctx.createBufferSource();
-          n.buffer = this.noiseBuffer;
-          const lp = ctx.createBiquadFilter();
-          lp.type = 'lowpass';
-          lp.frequency.value = material === 'metal' ? 1800 : 950;
-          const ng = ctx.createGain();
-          ng.gain.setValueAtTime(0.25 * gainScale, now);
-          ng.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
-          n.connect(lp);
-          lp.connect(ng);
-          ng.connect(dest);
-          n.start(now);
-          n.stop(now + 0.24);
-        }
+  public playSpatialDoorSlam(
+    pos: { x: number; y: number; z: number },
+    listenerPos: { x: number; z: number },
+    colliders: readonly AABBCollider[],
+    material: DoorMaterial,
+  ) {
+    this.playSpatialOneShot(
+      pos,
+      listenerPos,
+      colliders,
+      material === 'heavy_iron' ? 0.9 : 0.42,
+      (ctx, dest, gainScale) => {
+        playDoorActionOnNode(ctx, dest, material, 'close_slam', gainScale * 1.15);
       },
       2.2,
       26,
@@ -1166,6 +1387,7 @@ export class SpatialAudioEngine {
     stopNode(this.chasePulseOsc);
     stopNode(this.monsterBreathSrc);
     stopNode(this.monsterDroneOsc);
+    this.screamerLimiter?.disconnect();
     this.masterGain?.disconnect();
     this.initialized = false;
   }

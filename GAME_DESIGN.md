@@ -277,3 +277,34 @@ Mejora directa sobre la Fase 7 conservando intactos el recorrido, colisiones, ch
   3. `20–27 s`: Clímax con acorde de cierre definitivo (`Am9`) y fade out limpio sincronizado con el final del desplazamiento `.ending-roll` (`26.5 s`).
 - **Controles de audio compartidos**: Deslizador de **Volumen general (0–100%)** y casilla **Silenciar audio** en el menú de pausa (`PauseModal`), persistidos en `localStorage` y respetados por `audio.ts`, `spatialAudio.ts` y `finalAudio.ts`. Reiniciar desde checkpoint o volver al menú detiene y limpia todos los nodos sin pistas duplicadas.
 
+---
+
+## 13. Fase 7.2 — Persecución Más Violenta, Screamer Aterrador y Puertas por Material
+
+Mejora directa sobre la Fase 7.1 conservando intactos la fábrica final, la inclinación de cámara, «CONTINUARÁ», la música/scroll de créditos y «VOLVER AL MENÚ».
+
+### 13.1 Persecución final más agresiva (`finalSequence.ts`, `watcherModel.ts`, `watcher.ts`, `engine.ts`)
+- **Curva de presión en 3 momentos (`computeFinalChaseSpeed`)**:
+  - **Inicio (`0–1.5 s`, `PANIC_START`)**: Aceleración violenta (`6.32 → 6.08 m/s`) inmediatamente tras el portazo metálico en la espalda para transmitir empuje brutal desde el primer segundo.
+  - **Desarrollo (`DESPERATE_CHASE`)**: Presión sostenida (`6.08–6.18 m/s`) que compensa pequeños quiebros laterales sin pausas ni teletransporte.
+  - **Clímax (`FINAL_METERS`)**: Empuje máximo (`6.18–6.28 m/s`), con distancia final ~4.3 m en carrera limpia con `Shift` (100% superable si se corre sin errores, letal si el jugador se detiene, camina lento o choca).
+- **Giro y postura agresiva**: Velocidad de giro reforzada (`damp 22`) en persecución final; `watcherModel.ts` añade inclinación profunda del torso (`aggression` hasta `1.32`), hombros tensos y elevados, zancadas largas a mayor cadencia, brazos en barrido agresivo, espasmos cefálicos erráticos y garras abiertas.
+
+### 13.2 Screamer de captura cinematográfico (`scripts/generate-screamer.mjs`, `public/audio/`, `spatialAudio.ts`, `finalAudio.ts`)
+- **Activos masterizados locales sin 404**: Se sintetizó un screamer de terror multicapa (impacto subgrave, formantes vocales FM distorsionados, alarido agudo desgarrado y reverberación oscura de túnel) en `public/audio/monster-screamer.ogg` y `monster-screamer.wav`, seleccionados automáticamente según soporte del navegador.
+- **Limitador y sincronización**: `SpatialAudioEngine` enruta la captura por un `DynamicsCompressorNode` para evitar distorsión digital; `FinalAudio.duckForScreamer()` atenúa sirenas y música al instante; `t = 0.00 s` dispara el impacto físico del agarre y `t = 0.085 s` detona el pico del screamer sincronizado con la embestida visual hacia la cámara. Incluye respaldo procedural multicapa si el búfer aún está decodificando y limpieza total al reintentar o pausar.
+
+### 13.3 Sistema sonoro realista de puertas por material (`audio.ts`, `doors.ts`, `spatialAudio.ts`)
+- **Perfiles declarativos (`DOOR_MATERIAL_PROFILES`: `'wood' | 'metal' | 'heavy_iron'`)**:
+  - **Madera (`wood`)**: Picaporte discreto seguido de chirrido orgánico de bisagra envejecida y fricción de madera al abrir (sin golpe de cierre al abrir); al cerrar emite movimiento de hoja y un golpe sordo realista de madera contra marco (`close_slam`) sincronizado cuando la hoja alcanza el cierre físico (`|angle| < 0.14 rad`).
+  - **Metal (`metal`)**: Pestillo seco, rozamiento metálico de bisagras y golpe resonante contra marco de acero al cerrar.
+  - **Hierro pesado (`heavy_iron`, compuerta de salida)**: Cuatro fases sincronizadas con la animación de 4 segundos: `unlock` (3 candados + barra corredera + cerrojo subgrave), `open_start` (`0.8 s`, rotura de pasador y gemido estructural), bucle sostenido de fricción hierro-contra-hierro + temblor sutil del marco (`startHeavyIronOpeningLoop`, `0.8–3.92 s`) y `open_end` (`3.92 s`, impacto metálico final contra tope con cola de túnel). Todos los bucles se detienen limpiamente en reset, pausa o captura.
+- **Espacialidad**: Las puertas interiores reproducen sus eventos a través de `SpatialAudioEngine.playSpatialDoorSound` con atenuación 3D HRTF y oclusión por muros.
+
+### 13.4 Verificación automatizada y manual de Fase 7.2
+- `phase7.test.ts` verifica la curva de velocidad en los 3 momentos, supervivencia a 30/60/120 FPS en sprint, captura al caminar lento, inclinación/cadencia agresiva del rig, eventos de puerta (`open`/`close`/`close_slam` y 4 fases `heavy_iron`), perfiles por material y existencia de activos `monster-screamer.ogg`/`.wav`.
+- Verificación manual recomendada:
+  1. Abrir y cerrar puertas interiores de madera vs metal desde distintas distancias y detrás de paredes.
+  2. Desbloquear la compuerta final con 3 llaves y comprobar las 4 fases sonoras sincronizadas y el bucle continuo hasta la apertura completa.
+  3. Correr la persecución del túnel con `Shift` para validar que sigue siendo superable al límite y luego detenerse o caminar para validar el screamer de captura y el reintento limpio desde checkpoint sin sonidos duplicados.
+

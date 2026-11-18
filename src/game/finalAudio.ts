@@ -752,6 +752,20 @@ export class FinalAudio {
     }
   }
 
+  /** Rapidly ducks tunnel sirens & chase score so the capture screamer punches cleanly on impact. */
+  duckForScreamer() {
+    if (!this.bus) return;
+    const ctx = this.bus.context;
+    const now = ctx.currentTime;
+    try {
+      this.musicBus?.gain.setTargetAtTime(0.02, now, 0.015);
+      this.sirenBus?.gain.setTargetAtTime(0.02, now, 0.015);
+      this.bus.gain.setTargetAtTime(0.02, now, 0.018);
+    } catch {
+      // Ignore audio context errors
+    }
+  }
+
   stop() {
     const bus = this.bus;
     const voices = this.voices;

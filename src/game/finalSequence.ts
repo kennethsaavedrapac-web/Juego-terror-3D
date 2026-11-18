@@ -20,6 +20,31 @@ export const FINAL_MONSTER_SPEED = 5.95;
 export const END_CREDITS_DURATION = 27;
 export const smooth = (t: number) => { const v = Math.max(0, Math.min(1, t)); return v * v * (3 - 2 * v); };
 
+/**
+ * 3-moment violent chase pacing (INICIO -> MITAD -> FINAL):
+ * Surges faster than player sprint (5.6 m/s) while keeping a clean sprint survivable (~4 m margin at finish)
+ * and rapidly punishing stops, walking, obstacle bumps, or turning around.
+ */
+export function computeFinalChaseSpeed(
+  phase: FinalChasePhase,
+  monsterDistance: number,
+  chaseElapsed: number,
+): number {
+  if (phase === 'PANIC_START') {
+    const burst = chaseElapsed < 2.2 ? 0.24 : 0;
+    return 6.08 + burst;
+  }
+  if (phase === 'DESPERATE_CHASE') {
+    const catchup = monsterDistance > 10 ? 0.1 : 0;
+    return 6.08 + catchup;
+  }
+  if (phase === 'FINAL_METERS') {
+    const lunge = monsterDistance > 7 ? 0.1 : 0;
+    return 6.18 + lunge;
+  }
+  return FINAL_MONSTER_SPEED;
+}
+
 export function getFinalChasePhase(z: number, chasing: boolean, stage: FinalStage): FinalChasePhase {
   if (stage !== 'FINAL_ESCAPE' || !chasing) return 'NONE';
   if (z <= FINAL_STAGE_C_Z) return 'FINAL_METERS';

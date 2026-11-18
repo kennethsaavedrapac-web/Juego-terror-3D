@@ -269,25 +269,50 @@ export class Watcher {
     });
   }
 
-  /** Final straight corridor: same articulated rig, collision and lethal attack. */
-  updateFinal(dt: number, player: NavPoint, previous: NavPoint, speed: number) {
+  /** Final straight corridor: violent relentless chase with same articulated rig, collision and lethal attack. */
+  updateFinal(
+    dt: number,
+    player: NavPoint,
+    previous: NavPoint,
+    speed: number,
+    aggression = 1.0,
+  ) {
     if (!this.active || this.state === 'ATTACK') return;
     this.setState('CHASE');
-    const dx=player.x-this.position.x, dz=player.z-this.position.z;
-    const distance=Math.hypot(dx,dz);
-    const oldX=this.position.x, oldZ=this.position.z;
-    const step=Math.min(distance,speed*dt);
-    if(distance>0){ this.position.x+=dx/distance*step; this.position.z+=dz/distance*step; }
-    for(let pass=0;pass<2;pass++) for(const c of this.colliders){
-      const r=resolveCircleAABB(this.position.x,this.position.z,.46,c);
-      this.position.x=r.x; this.position.z=r.z;
+    const dx = player.x - this.position.x;
+    const dz = player.z - this.position.z;
+    const distance = Math.hypot(dx, dz);
+    const oldX = this.position.x;
+    const oldZ = this.position.z;
+    const step = Math.min(distance, speed * dt);
+    if (distance > 0) {
+      this.position.x += (dx / distance) * step;
+      this.position.z += (dz / distance) * step;
     }
-    this.position.y=0;
-    this.model.root.rotation.y=dampAngle(this.model.root.rotation.y,Math.atan2(-dx,-dz),12,dt);
-    this.currentSpeed=Math.hypot(this.position.x-oldX,this.position.z-oldZ)/Math.max(dt,.001);
-    this.model.animate(dt,this.currentSpeed,false,false,{animState:'RUN',onFootstep:(intensity,running)=>this.hooks.onFootstep?.(intensity,running,this.position)});
-    if(isInsideLethalReach(this.position,previous,player,this.colliders)){
-      this.setState('ATTACK'); this.onCapture();
+    for (let pass = 0; pass < 2; pass++) {
+      for (const c of this.colliders) {
+        const r = resolveCircleAABB(this.position.x, this.position.z, 0.46, c);
+        this.position.x = r.x;
+        this.position.z = r.z;
+      }
+    }
+    this.position.y = 0;
+    const desiredYaw = Math.atan2(-dx, -dz);
+    this.model.root.rotation.y = dampAngle(this.model.root.rotation.y, desiredYaw, 22, dt);
+    this.currentSpeed = Math.hypot(this.position.x - oldX, this.position.z - oldZ) / Math.max(dt, 0.001);
+    const lookYawOffset = Math.atan2(
+      Math.sin(desiredYaw - this.model.root.rotation.y),
+      Math.cos(desiredYaw - this.model.root.rotation.y),
+    );
+    this.model.animate(dt, this.currentSpeed, false, false, {
+      animState: 'RUN',
+      aggression,
+      lookYawOffset,
+      onFootstep: (intensity, running) => this.hooks.onFootstep?.(intensity, running, this.position),
+    });
+    if (isInsideLethalReach(this.position, previous, player, this.colliders)) {
+      this.setState('ATTACK');
+      this.onCapture();
     }
   }
 
