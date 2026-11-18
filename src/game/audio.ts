@@ -1,4 +1,36 @@
 let audioCtx: AudioContext | null = null;
+let sfxMasterGain: GainNode | null = null;
+let masterVolume = 0.85;
+let masterMuted = false;
+const audioListeners = new Set<() => void>();
+
+export function getAudioSettings() {
+  return { volume: masterVolume, muted: masterMuted };
+}
+
+export function getEffectiveVolume(): number {
+  return masterMuted ? 0 : Math.max(0, Math.min(1, masterVolume));
+}
+
+export function setAudioSettings(volume?: number, muted?: boolean) {
+  if (typeof volume === 'number' && Number.isFinite(volume)) {
+    masterVolume = Math.max(0, Math.min(1, volume));
+  }
+  if (typeof muted === 'boolean') {
+    masterMuted = muted;
+  }
+  if (audioCtx && sfxMasterGain) {
+    sfxMasterGain.gain.setTargetAtTime(getEffectiveVolume(), audioCtx.currentTime, 0.03);
+  }
+  for (const listener of audioListeners) {
+    listener();
+  }
+}
+
+export function subscribeAudioSettings(listener: () => void): () => void {
+  audioListeners.add(listener);
+  return () => audioListeners.delete(listener);
+}
 
 export function getSharedAudioContext(): AudioContext | null {
   if (typeof window === 'undefined') return null;
@@ -20,16 +52,24 @@ export function getSharedAudioContext(): AudioContext | null {
   return audioCtx;
 }
 
-function getAudioContext(): AudioContext | null {
-  return getSharedAudioContext();
+function getSfxOutput(): { ctx: AudioContext; out: AudioNode } | null {
+  const ctx = getSharedAudioContext();
+  if (!ctx) return null;
+  if (!sfxMasterGain || sfxMasterGain.context !== ctx) {
+    sfxMasterGain = ctx.createGain();
+    sfxMasterGain.gain.value = getEffectiveVolume();
+    sfxMasterGain.connect(ctx.destination);
+  }
+  return { ctx, out: sfxMasterGain };
 }
 
 export function playDoorSound(
   material: 'wood' | 'metal',
   action: 'open' | 'close' | 'locked',
 ) {
-  const ctx = getAudioContext();
-  if (!ctx) return;
+  const audio = getSfxOutput();
+  if (!audio) return;
+  const { ctx, out } = audio;
 
   const now = ctx.currentTime;
 
@@ -44,7 +84,7 @@ export function playDoorSound(
       gain.gain.setValueAtTime(0.14, t);
       gain.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
       osc.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(out);
       osc.start(t);
       osc.stop(t + 0.075);
     }
@@ -59,7 +99,7 @@ export function playDoorSound(
   clickGain.gain.setValueAtTime(0.07, now);
   clickGain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
   clickOsc.connect(clickGain);
-  clickGain.connect(ctx.destination);
+  clickGain.connect(out);
   clickOsc.start(now);
   clickOsc.stop(now + 0.055);
 
@@ -82,14 +122,15 @@ export function playDoorSound(
 
   creakOsc.connect(filter);
   filter.connect(creakGain);
-  creakGain.connect(ctx.destination);
+  creakGain.connect(out);
   creakOsc.start(now + 0.03);
   creakOsc.stop(now + 0.34);
 }
 
 export function playFlashlightSound(turningOn: boolean) {
-  const ctx = getAudioContext();
-  if (!ctx) return;
+  const audio = getSfxOutput();
+  if (!audio) return;
+  const { ctx, out } = audio;
 
   const now = ctx.currentTime;
   const osc = ctx.createOscillator();
@@ -102,14 +143,15 @@ export function playFlashlightSound(turningOn: boolean) {
   gain.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
 
   osc.connect(gain);
-  gain.connect(ctx.destination);
+  gain.connect(out);
   osc.start(now);
   osc.stop(now + 0.045);
 }
 
 export function playKeyPickupSound() {
-  const ctx = getAudioContext();
-  if (!ctx) return;
+  const audio = getSfxOutput();
+  if (!audio) return;
+  const { ctx, out } = audio;
 
   const now = ctx.currentTime;
   const freqs = [880, 1320, 1760];
@@ -123,15 +165,16 @@ export function playKeyPickupSound() {
     gain.gain.setValueAtTime(0.075, t);
     gain.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(out);
     osc.start(t);
     osc.stop(t + 0.19);
   }
 }
 
 export function playNoteSound() {
-  const ctx = getAudioContext();
-  if (!ctx) return;
+  const audio = getSfxOutput();
+  if (!audio) return;
+  const { ctx, out } = audio;
 
   const now = ctx.currentTime;
   // Crisp paper rustle via short filtered white noise burst
@@ -156,13 +199,14 @@ export function playNoteSound() {
 
   noise.connect(filter);
   filter.connect(gain);
-  gain.connect(ctx.destination);
+  gain.connect(out);
   noise.start(now);
 }
 
 export function playExamineSound() {
-  const ctx = getAudioContext();
-  if (!ctx) return;
+  const audio = getSfxOutput();
+  if (!audio) return;
+  const { ctx, out } = audio;
 
   const now = ctx.currentTime;
   const osc = ctx.createOscillator();
@@ -173,14 +217,15 @@ export function playExamineSound() {
   gain.gain.setValueAtTime(0.05, now);
   gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
   osc.connect(gain);
-  gain.connect(ctx.destination);
+  gain.connect(out);
   osc.start(now);
   osc.stop(now + 0.16);
 }
 
 export function playExitUnlockSound() {
-  const ctx = getAudioContext();
-  if (!ctx) return;
+  const audio = getSfxOutput();
+  if (!audio) return;
+  const { ctx, out } = audio;
 
   const now = ctx.currentTime;
   // Heavy bolt retract + low metallic resonance
@@ -195,7 +240,7 @@ export function playExitUnlockSound() {
     gain.gain.setValueAtTime(0.1, t);
     gain.gain.exponentialRampToValueAtTime(0.001, t + 0.24);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(out);
     osc.start(t);
     osc.stop(t + 0.25);
   }

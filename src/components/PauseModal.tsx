@@ -61,7 +61,7 @@ export const PauseModal: FC<PauseModalProps> = ({
 
         <fieldset className="mt-6 border border-white/10 bg-[#090b10] p-3.5 text-left">
           <legend className="px-1.5 text-[10px] font-semibold tracking-[0.16em] text-[#8d877d] uppercase">
-            Comodidad visual
+            Comodidad y audio
           </legend>
           <label className="flex cursor-pointer items-center justify-between gap-3 py-1.5 text-xs text-[#d6d3cd]">
             <span>Reducir movimiento de cámara</span>
@@ -91,6 +91,43 @@ export const PauseModal: FC<PauseModalProps> = ({
               className="h-4 w-4 accent-[#b91c1c]"
             />
           </label>
+          <div className="mt-2 border-t border-white/10 pt-2">
+            <label className="flex items-center justify-between gap-3 py-1 text-xs text-[#d6d3cd]">
+              <span>Volumen general</span>
+              <span className="font-mono-tabular text-[11px] text-[#9c968c]">
+                {settings.audioMuted ? 'Silencio' : `${Math.round((settings.audioVolume ?? 0.85) * 100)}%`}
+              </span>
+            </label>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={Math.round((settings.audioVolume ?? 0.85) * 100)}
+              aria-label="Volumen general"
+              onChange={(e) =>
+                onUpdateSettings({
+                  ...settings,
+                  audioVolume: Number(e.target.value) / 100,
+                  audioMuted: Number(e.target.value) === 0 ? true : false,
+                })
+              }
+              className="mt-1 h-1.5 w-full cursor-pointer accent-[#b91c1c]"
+            />
+            <label className="mt-1.5 flex cursor-pointer items-center justify-between gap-3 py-1 text-xs text-[#d6d3cd]">
+              <span>Silenciar audio</span>
+              <input
+                type="checkbox"
+                checked={Boolean(settings.audioMuted)}
+                onChange={(e) =>
+                  onUpdateSettings({
+                    ...settings,
+                    audioMuted: e.target.checked,
+                  })
+                }
+                className="h-4 w-4 accent-[#b91c1c]"
+              />
+            </label>
+          </div>
         </fieldset>
 
         <div className="mt-5 border-t border-white/10 pt-4 text-[11px] leading-relaxed text-[#847e74]">

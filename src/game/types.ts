@@ -169,6 +169,8 @@ export type TensionLevel = 1 | 2 | 3 | 4;
 export interface AccessibilitySettings {
   reducedCameraMotion: boolean;
   disableFlashes: boolean;
+  audioVolume?: number; // 0..1
+  audioMuted?: boolean;
 }
 
 export interface GameEngineCallbacks {

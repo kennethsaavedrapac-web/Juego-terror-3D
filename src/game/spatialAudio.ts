@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { getSharedAudioContext } from './audio';
+import { getEffectiveVolume, getSharedAudioContext } from './audio';
 import { segmentIntersectsAABB } from './physics';
 import type { AABBCollider, TensionLevel } from './types';
 import type { WatcherState } from './watcher';
@@ -91,10 +91,12 @@ export class SpatialAudioEngine {
   private deathSeqTimers: number[] = [];
 
   private activeVoices = 0;
-  private readonly maxVoices = 8;
+  private readonly maxVoices = 14;
   private lastGrowlAt = -10;
+  private lastExhaleAt = -10;
   private lastCreakAt = -10;
   private lastStepAt = -10;
+  private stepParity = false;
   private silenceTimer = 0;
   private initialized = false;
   private disposed = false;
@@ -267,7 +269,7 @@ export class SpatialAudioEngine {
   public setMuted(muted: boolean) {
     if (!this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;
-    this.masterGain.gain.setTargetAtTime(muted ? 0.0 : 0.9, now, 0.08);
+    this.masterGain.gain.setTargetAtTime(muted ? 0.0 : 0.9 * getEffectiveVolume(), now, 0.08);
   }
 
   public triggerSuddenSilence(durationSec: number) {
@@ -286,6 +288,8 @@ export class SpatialAudioEngine {
     tensionIntensity: number;
     exhausted: boolean;
     colliders: readonly AABBCollider[];
+    finalChaseMode?: boolean;
+    chaseProximity?: number;
   }) {
     if (!params.active) {
       if (this.masterGain && this.ctx) {
@@ -298,7 +302,7 @@ export class SpatialAudioEngine {
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
-    this.masterGain.gain.setTargetAtTime(0.9, now, 0.12);
+    this.masterGain.gain.setTargetAtTime(0.92 * getEffectiveVolume(), now, 0.08);
     this.updateListener(params.camera, now);
 
     if (this.silenceTimer > 0) {
@@ -306,44 +310,60 @@ export class SpatialAudioEngine {
     }
     const silenceMult = this.silenceTimer > 0 ? 0.04 : 1.0;
 
-    // 1. Dynamic Tension Layers (Levels 1..4)
-    const humTarget = (0.028 + params.tensionIntensity * 0.022) * silenceMult;
-    this.ambientHumGain?.gain.setTargetAtTime(humTarget, now, 0.25);
+    if (params.finalChaseMode) {
+      // Final tunnel emergency pursuit: suppress slow ambient building drone, focus on monster & player panic
+      this.ambientHumGain?.gain.setTargetAtTime(0.0, now, 0.15);
+      this.tensionDroneGain?.gain.setTargetAtTime(0.0, now, 0.15);
+      this.chasePulseGain?.gain.setTargetAtTime(0.0, now, 0.15);
 
-    const droneTarget =
-      params.tensionLevel >= 2
-        ? (0.015 + Math.max(0, params.tensionIntensity - 0.2) * 0.075) * silenceMult
-        : 0.0;
-    this.tensionDroneGain?.gain.setTargetAtTime(droneTarget, now, 0.35);
-
-    const chasePulse =
-      params.tensionLevel === 4
-        ? (0.03 + 0.028 * (0.5 + 0.5 * Math.sin(params.elapsed * 5.2))) * silenceMult
-        : 0.0;
-    this.chasePulseGain?.gain.setTargetAtTime(chasePulse, now, 0.12);
-
-    // 2. Level 2+ distant metallic creaks/pipes
-    if (params.tensionLevel >= 2 && this.silenceTimer <= 0) {
-      this.distantNoiseTimer -= params.dt;
-      if (this.distantNoiseTimer <= 0) {
-        this.distantNoiseTimer = params.tensionLevel >= 3 ? 7 + Math.random() * 6 : 11 + Math.random() * 8;
-        const angle = Math.random() * Math.PI * 2;
-        const dist = 9 + Math.random() * 7;
-        const pos = {
-          x: params.camera.position.x + Math.cos(angle) * dist,
-          y: params.camera.position.y,
-          z: params.camera.position.z + Math.sin(angle) * dist,
-        };
-        this.playDistantPipeGroan(pos, params.camera.position, params.colliders);
+      const prox = params.chaseProximity ?? params.tensionIntensity;
+      if (params.watcherActive && (params.tensionIntensity > 0.45 || prox > 0.25)) {
+        this.playerBreathTimer -= params.dt;
+        if (this.playerBreathTimer <= 0) {
+          this.playerBreathTimer = THREE.MathUtils.lerp(0.95, 0.44, Math.max(prox, params.tensionIntensity));
+          this.playPlayerBreath(0.04 + prox * 0.055);
+        }
       }
-    }
+    } else {
+      // 1. Dynamic Tension Layers (Levels 1..4)
+      const humTarget = (0.028 + params.tensionIntensity * 0.022) * silenceMult;
+      this.ambientHumGain?.gain.setTargetAtTime(humTarget, now, 0.25);
 
-    // 3. Level 4 or exhausted player agitated breathing
-    if ((params.tensionLevel === 4 || params.exhausted) && this.silenceTimer <= 0) {
-      this.playerBreathTimer -= params.dt;
-      if (this.playerBreathTimer <= 0) {
-        this.playerBreathTimer = params.tensionLevel === 4 ? 0.85 : 1.15;
-        this.playPlayerBreath(params.tensionLevel === 4 ? 0.055 : 0.038);
+      const droneTarget =
+        params.tensionLevel >= 2
+          ? (0.015 + Math.max(0, params.tensionIntensity - 0.2) * 0.075) * silenceMult
+          : 0.0;
+      this.tensionDroneGain?.gain.setTargetAtTime(droneTarget, now, 0.35);
+
+      const chasePulse =
+        params.tensionLevel === 4
+          ? (0.03 + 0.028 * (0.5 + 0.5 * Math.sin(params.elapsed * 5.2))) * silenceMult
+          : 0.0;
+      this.chasePulseGain?.gain.setTargetAtTime(chasePulse, now, 0.12);
+
+      // 2. Level 2+ distant metallic creaks/pipes
+      if (params.tensionLevel >= 2 && this.silenceTimer <= 0) {
+        this.distantNoiseTimer -= params.dt;
+        if (this.distantNoiseTimer <= 0) {
+          this.distantNoiseTimer = params.tensionLevel >= 3 ? 7 + Math.random() * 6 : 11 + Math.random() * 8;
+          const angle = Math.random() * Math.PI * 2;
+          const dist = 9 + Math.random() * 7;
+          const pos = {
+            x: params.camera.position.x + Math.cos(angle) * dist,
+            y: params.camera.position.y,
+            z: params.camera.position.z + Math.sin(angle) * dist,
+          };
+          this.playDistantPipeGroan(pos, params.camera.position, params.colliders);
+        }
+      }
+
+      // 3. Level 4 or exhausted player agitated breathing
+      if ((params.tensionLevel === 4 || params.exhausted) && this.silenceTimer <= 0) {
+        this.playerBreathTimer -= params.dt;
+        if (this.playerBreathTimer <= 0) {
+          this.playerBreathTimer = params.tensionLevel === 4 ? 0.85 : 1.15;
+          this.playPlayerBreath(params.tensionLevel === 4 ? 0.055 : 0.038);
+        }
       }
     }
 
@@ -369,21 +389,22 @@ export class SpatialAudioEngine {
 
         const isFrozen = params.watcherState === 'FROZEN';
         const isChase = params.watcherState === 'CHASE';
-        const breathSpeed = isChase ? 4.6 : isFrozen ? 1.3 : 2.2;
-        const breathCycle = 0.50 + 0.50 * Math.sin(params.elapsed * breathSpeed);
-        const breathBase = isFrozen ? 0.028 : isChase ? 0.15 : 0.075;
+        const breathSpeed = params.finalChaseMode ? 7.4 : isChase ? 4.6 : isFrozen ? 1.3 : 2.2;
+        const breathCycle = 0.45 + 0.55 * Math.sin(params.elapsed * breathSpeed);
+        const breathBase = isFrozen ? 0.028 : params.finalChaseMode ? 0.24 : isChase ? 0.15 : 0.075;
         this.monsterBreathGain.gain.setTargetAtTime(
           breathBase * breathCycle * att.gainMultiplier * silenceMult,
           now,
-          0.1,
+          0.08,
         );
 
         const dist = params.camera.position.distanceTo(params.watcherPos);
-        const proxGain = dist < 16 ? (1 - dist / 16) * 0.085 : 0;
+        const maxDroneDist = params.finalChaseMode ? 22 : 16;
+        const proxGain = dist < maxDroneDist ? (1 - dist / maxDroneDist) * (params.finalChaseMode ? 0.14 : 0.085) : 0;
         this.monsterDroneGain.gain.setTargetAtTime(
           proxGain * att.gainMultiplier * silenceMult,
           now,
-          0.14,
+          0.12,
         );
       }
     }
@@ -424,56 +445,104 @@ export class SpatialAudioEngine {
     colliders: readonly AABBCollider[],
     intensity: number,
     isRunning: boolean,
+    tunnelEcho = false,
   ) {
-    if (!this.ctx) return;
+    if (!this.ensureInitialized() || !this.ctx) return;
     const t = this.ctx.currentTime;
-    if (t - this.lastStepAt < (isRunning ? 0.16 : 0.28)) return;
+    if (t - this.lastStepAt < (isRunning ? 0.15 : 0.28)) return;
     this.lastStepAt = t;
+    this.stepParity = !this.stepParity;
 
-    const dur = isRunning ? 0.16 : 0.21;
+    const dur = isRunning ? 0.24 : 0.21;
+    const refDist = isRunning ? (tunnelEcho ? 4.4 : 2.6) : 1.8;
+    const maxDist = isRunning ? (tunnelEcho ? 46 : 32) : 26;
+    const pitchShift = this.stepParity ? 1.0 : 0.91;
+
     this.playSpatialOneShot(
       { x: pos.x, y: pos.y + 0.12, z: pos.z },
       listenerPos,
       colliders,
-      dur,
+      dur + (tunnelEcho ? 0.09 : 0),
       (ctx, dest, gainScale, now) => {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'triangle';
-        const baseFreq = isRunning ? 92 + Math.random() * 16 : 68 + Math.random() * 12;
-        osc.frequency.setValueAtTime(baseFreq, now);
-        osc.frequency.exponentialRampToValueAtTime(28, now + dur * 0.85);
+        // 1. Heavy sub-bass monster weight impact
+        const subOsc = ctx.createOscillator();
+        const subGain = ctx.createGain();
+        subOsc.type = isRunning ? 'sine' : 'triangle';
+        const baseFreq = (isRunning ? 104 : 68) * pitchShift + Math.random() * 10;
+        subOsc.frequency.setValueAtTime(baseFreq, now);
+        subOsc.frequency.exponentialRampToValueAtTime(24, now + dur * 0.85);
 
-        const vol = (isRunning ? 0.24 : 0.16) * intensity * gainScale;
-        gain.gain.setValueAtTime(0.001, now);
-        gain.gain.linearRampToValueAtTime(vol, now + 0.012);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+        const heavyBoost = tunnelEcho ? 1.55 : 1.0;
+        const vol = (isRunning ? 0.34 : 0.16) * heavyBoost * intensity * gainScale;
+        subGain.gain.setValueAtTime(0.001, now);
+        subGain.gain.linearRampToValueAtTime(vol, now + 0.01);
+        subGain.gain.exponentialRampToValueAtTime(0.001, now + dur);
 
-        osc.connect(gain);
-        gain.connect(dest);
-        osc.start(now);
-        osc.stop(now + dur + 0.02);
+        subOsc.connect(subGain);
+        subGain.connect(dest);
+        subOsc.start(now);
+        subOsc.stop(now + dur + 0.02);
 
-        // Subtle dry floor scrape
+        // 2. Concrete / grating crunch + metallic ring on heavy running steps
+        if (isRunning) {
+          const clangOsc = ctx.createOscillator();
+          const clangBp = ctx.createBiquadFilter();
+          const clangGain = ctx.createGain();
+          clangOsc.type = 'triangle';
+          clangOsc.frequency.setValueAtTime((225 + Math.random() * 45) * pitchShift, now);
+          clangOsc.frequency.exponentialRampToValueAtTime(82, now + 0.13);
+          clangBp.type = 'bandpass';
+          clangBp.frequency.value = 360;
+          clangBp.Q.value = 2.2;
+          clangGain.gain.setValueAtTime(0.001, now);
+          clangGain.gain.linearRampToValueAtTime(vol * 0.38, now + 0.008);
+          clangGain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+          clangOsc.connect(clangBp);
+          clangBp.connect(clangGain);
+          clangGain.connect(dest);
+          clangOsc.start(now);
+          clangOsc.stop(now + 0.15);
+        }
+
+        // 3. Floor scrape / grit transient
         if (this.noiseBuffer) {
           const noise = ctx.createBufferSource();
           noise.buffer = this.noiseBuffer;
           const bp = ctx.createBiquadFilter();
           bp.type = 'bandpass';
-          bp.frequency.value = isRunning ? 950 : 620;
-          bp.Q.value = 1.6;
+          bp.frequency.value = (isRunning ? 740 : 620) * pitchShift;
+          bp.Q.value = 1.4;
           const ng = ctx.createGain();
-          ng.gain.setValueAtTime(vol * 0.35, now);
-          ng.gain.exponentialRampToValueAtTime(0.001, now + dur * 0.7);
+          ng.gain.setValueAtTime(vol * (isRunning ? 0.45 : 0.35), now);
+          ng.gain.exponentialRampToValueAtTime(0.001, now + dur * 0.72);
           noise.connect(bp);
           bp.connect(ng);
           ng.connect(dest);
           noise.start(now);
           noise.stop(now + dur);
+
+          // 4. Industrial tunnel slapback echo on heavy chase strides
+          if (tunnelEcho) {
+            const echoTime = now + 0.085;
+            const echoNoise = ctx.createBufferSource();
+            echoNoise.buffer = this.noiseBuffer;
+            const echoLp = ctx.createBiquadFilter();
+            echoLp.type = 'lowpass';
+            echoLp.frequency.value = 520;
+            const echoGain = ctx.createGain();
+            echoGain.gain.setValueAtTime(0.001, echoTime);
+            echoGain.gain.linearRampToValueAtTime(vol * 0.28, echoTime + 0.01);
+            echoGain.gain.exponentialRampToValueAtTime(0.001, echoTime + 0.16);
+            echoNoise.connect(echoLp);
+            echoLp.connect(echoGain);
+            echoGain.connect(dest);
+            echoNoise.start(echoTime);
+            echoNoise.stop(echoTime + 0.17);
+          }
         }
       },
-      1.8,
-      26,
+      refDist,
+      maxDist,
     );
   }
 
@@ -482,13 +551,14 @@ export class SpatialAudioEngine {
     listenerPos: THREE.Vector3,
     colliders: readonly AABBCollider[],
     aggressive = false,
+    force = false,
   ) {
     if (!this.ensureInitialized() || !this.ctx) return;
     const t = this.ctx.currentTime;
-    if (t - this.lastGrowlAt < 6.5) return;
+    if (!force && t - this.lastGrowlAt < 5.0) return;
     this.lastGrowlAt = t;
 
-    const dur = aggressive ? 0.95 : 1.25;
+    const dur = aggressive ? 1.05 : 1.25;
     this.playSpatialOneShot(
       { x: pos.x, y: pos.y + 2.3, z: pos.z },
       listenerPos,
@@ -503,24 +573,24 @@ export class SpatialAudioEngine {
         const gain = ctx.createGain();
 
         osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(aggressive ? 74 : 58, now);
-        osc.frequency.linearRampToValueAtTime(aggressive ? 52 : 42, now + dur);
+        osc.frequency.setValueAtTime(aggressive ? 84 : 58, now);
+        osc.frequency.linearRampToValueAtTime(aggressive ? 48 : 42, now + dur);
 
         mod.type = 'sine';
-        mod.frequency.value = aggressive ? 26 : 16;
-        modGain.gain.value = 14;
+        mod.frequency.value = aggressive ? 32 : 16;
+        modGain.gain.value = aggressive ? 18 : 14;
         mod.connect(modGain);
         modGain.connect(osc.frequency);
 
         bp.type = 'bandpass';
-        bp.frequency.setValueAtTime(310, now);
+        bp.frequency.setValueAtTime(aggressive ? 390 : 310, now);
         bp.frequency.linearRampToValueAtTime(190, now + dur);
-        bp.Q.value = 2.4;
+        bp.Q.value = 2.2;
 
         shaper.curve = this.distortionCurve;
-        const vol = (aggressive ? 0.22 : 0.15) * gainScale;
+        const vol = (aggressive ? 0.34 : 0.15) * gainScale;
         gain.gain.setValueAtTime(0.001, now);
-        gain.gain.linearRampToValueAtTime(vol, now + 0.14);
+        gain.gain.linearRampToValueAtTime(vol, now + 0.12);
         gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
 
         osc.connect(bp);
@@ -532,8 +602,55 @@ export class SpatialAudioEngine {
         osc.stop(now + dur + 0.02);
         mod.stop(now + dur + 0.02);
       },
-      2.0,
-      28,
+      aggressive ? 3.2 : 2.0,
+      aggressive ? 42 : 28,
+    );
+  }
+
+  /** Aggressive running exhalation / guttural rasp between monster roars. */
+  public playMonsterExhale(
+    pos: THREE.Vector3,
+    listenerPos: THREE.Vector3,
+    colliders: readonly AABBCollider[],
+  ) {
+    if (!this.ensureInitialized() || !this.ctx || !this.noiseBuffer) return;
+    const t = this.ctx.currentTime;
+    if (t - this.lastExhaleAt < 1.6) return;
+    this.lastExhaleAt = t;
+
+    const dur = 0.52;
+    this.playSpatialOneShot(
+      { x: pos.x, y: pos.y + 2.2, z: pos.z },
+      listenerPos,
+      colliders,
+      dur,
+      (ctx, dest, gainScale, now) => {
+        if (!this.noiseBuffer) return;
+        const src = ctx.createBufferSource();
+        src.buffer = this.noiseBuffer;
+        const bp = ctx.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.frequency.setValueAtTime(540 + Math.random() * 140, now);
+        bp.frequency.exponentialRampToValueAtTime(240, now + dur);
+        bp.Q.value = 2.6;
+
+        const shaper = ctx.createWaveShaper();
+        shaper.curve = this.distortionCurve;
+
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.001, now);
+        gain.gain.linearRampToValueAtTime(0.26 * gainScale, now + 0.08);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+
+        src.connect(bp);
+        bp.connect(shaper);
+        shaper.connect(gain);
+        gain.connect(dest);
+        src.start(now);
+        src.stop(now + dur + 0.02);
+      },
+      3.0,
+      36,
     );
   }
 
@@ -636,7 +753,7 @@ export class SpatialAudioEngine {
     const dur = 0.85;
     this.trackVoice(dur);
 
-    this.masterGain.gain.setTargetAtTime(0.95, now, 0.03);
+    this.masterGain.gain.setTargetAtTime(0.95 * getEffectiveVolume(), now, 0.03);
     this.fadeOutGameplayLoops();
 
     // Heavy low impact + dissonant metallic shriek
@@ -732,7 +849,7 @@ export class SpatialAudioEngine {
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
-    this.masterGain.gain.setTargetAtTime(0.85, now, 0.25);
+    this.masterGain.gain.setTargetAtTime(0.85 * getEffectiveVolume(), now, 0.25);
     this.fadeOutGameplayLoops();
 
     try {

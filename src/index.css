@@ -58,7 +58,7 @@
 @keyframes endingTitle { 0%,100% {opacity:0} 20%,70% {opacity:1} }
 @keyframes endingFade { 0% {background:#0000} 20%,70% {background:#0006} 100% {background:#000} }
 .ending-black { position:fixed; inset:0; z-index:50; background:#000; overflow:hidden; color:#eee; }
-.ending-roll { position:absolute; top:100%; width:100%; text-align:center; padding:0 1.5rem; will-change:transform; animation:endingScroll 26s linear both; font-family:Georgia,serif; }
+.ending-roll { position:absolute; top:100%; width:100%; text-align:center; padding:0 1.5rem; will-change:transform; animation:endingScroll 26.5s linear both; font-family:Georgia,serif; }
 .ending-roll h2 { font-weight:400; letter-spacing:.15em; font-size:clamp(1.1rem,3vw,1.8rem); margin:0 0 4rem; }
 .ending-roll p { font-size:clamp(1.2rem,3.2vw,2.2rem); font-weight:400; margin:0 0 3rem; line-height:1.5; }
 .ending-roll .ending-dedication { font-size:clamp(1rem,2.5vw,1.6rem); margin:6rem auto 0; max-width:90%; padding-bottom:2rem; }

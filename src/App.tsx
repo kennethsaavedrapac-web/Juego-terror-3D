@@ -25,14 +25,16 @@ function shouldAutostart(): boolean {
 function loadAccessibilitySettings(): AccessibilitySettings {
   try {
     const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
-    if (!raw) return { reducedCameraMotion: false, disableFlashes: false };
+    if (!raw) return { reducedCameraMotion: false, disableFlashes: false, audioVolume: 0.85, audioMuted: false };
     const parsed = JSON.parse(raw) as Partial<AccessibilitySettings>;
     return {
       reducedCameraMotion: Boolean(parsed.reducedCameraMotion),
       disableFlashes: Boolean(parsed.disableFlashes),
+      audioVolume: typeof parsed.audioVolume === 'number' ? Math.max(0, Math.min(1, parsed.audioVolume)) : 0.85,
+      audioMuted: Boolean(parsed.audioMuted),
     };
   } catch {
-    return { reducedCameraMotion: false, disableFlashes: false };
+    return { reducedCameraMotion: false, disableFlashes: false, audioVolume: 0.85, audioMuted: false };
   }
 }
 

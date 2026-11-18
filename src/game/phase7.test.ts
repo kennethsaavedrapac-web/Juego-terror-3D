@@ -1,8 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { FinalSequence, FINAL_LENGTH, FACTORY_Z, FINAL_MONSTER_SPEED, smooth } from './finalSequence';
+import {
+  FinalSequence,
+  FINAL_LENGTH,
+  FACTORY_Z,
+  FINAL_MONSTER_SPEED,
+  FINAL_STAGE_B_Z,
+  FINAL_STAGE_C_Z,
+  END_CREDITS_DURATION,
+  getFinalChasePhase,
+  getFinalChaseMetrics,
+  smooth,
+} from './finalSequence';
 import { finalColliders } from './finalEnvironment';
+import { FinalAudio } from './finalAudio';
+import { getAudioSettings, getEffectiveVolume, setAudioSettings } from './audio';
 import { resolvePlayerMovement, SPRINT_SPEED } from './physics';
 import { Watcher } from './watcher';
 import { createDoorSystem } from './doors';
@@ -64,3 +77,65 @@ test('safe boundary precedes attack; reveal, title and moving credits finish onc
   sequence.reset();assert.equal(sequence.stage,'PLAYING');assert.equal(sequence.checkpoint,false);
   assert.equal(smooth(0),0);assert.equal(smooth(1),1);assert.ok(smooth(.01)<.001);
 });
+
+test('Phase 7.1: 3-stage final chase progression and real-distance proximity metrics', () => {
+  assert.equal(END_CREDITS_DURATION, 27);
+  assert.equal(getFinalChasePhase(-30, false, 'FINAL_ESCAPE'), 'NONE');
+  assert.equal(getFinalChasePhase(-50, true, 'FINAL_ESCAPE'), 'PANIC_START');
+  assert.equal(getFinalChasePhase(FINAL_STAGE_B_Z - 1, true, 'FINAL_ESCAPE'), 'DESPERATE_CHASE');
+  assert.equal(getFinalChasePhase(FINAL_STAGE_C_Z - 1, true, 'FINAL_ESCAPE'), 'FINAL_METERS');
+
+  const far = getFinalChaseMetrics(-50, -25, true, 'FINAL_ESCAPE');
+  const close = getFinalChaseMetrics(-115, -110.5, true, 'FINAL_ESCAPE');
+  assert.equal(far.phase, 'PANIC_START');
+  assert.equal(close.phase, 'FINAL_METERS');
+  assert.ok(close.threatProximity > far.threatProximity);
+  assert.ok(close.monsterDistance < far.monsterDistance);
+  assert.ok(close.tunnelProgress > 0.8 && close.tunnelProgress < 1);
+  assert.equal(getFinalChaseMetrics(-135, -130, true, 'FINAL_FACTORY_REVEAL').threatProximity, 0);
+});
+
+test('Phase 7.1: shared audio volume and mute controls clamp cleanly', () => {
+  const prev = getAudioSettings();
+  try {
+    setAudioSettings(0.6, false);
+    assert.equal(getEffectiveVolume(), 0.6);
+    setAudioSettings(1.8, false);
+    assert.equal(getEffectiveVolume(), 1);
+    setAudioSettings(-0.4, false);
+    assert.equal(getEffectiveVolume(), 0);
+    setAudioSettings(0.75, true);
+    assert.equal(getEffectiveVolume(), 0);
+  } finally {
+    setAudioSettings(prev.volume, prev.muted);
+  }
+});
+
+test('Phase 7.1: FinalAudio handles stage changes, updates, and reset safely without Web Audio global', () => {
+  const audio = new FinalAudio();
+  assert.doesNotThrow(() => {
+    audio.setStage('FINAL_DOOR_OPENING');
+    audio.update(0.05, 'PANIC_START', 0.2);
+    audio.setStage('FINAL_ESCAPE');
+    audio.playTunnelLockdownSlam();
+    audio.update(0.05, 'DESPERATE_CHASE', 0.65);
+    audio.update(0.05, 'FINAL_METERS', 0.9);
+    audio.setStage('FINAL_FACTORY_REVEAL');
+    audio.setStage('TO_BE_CONTINUED');
+    audio.setStage('END_CREDITS');
+    audio.update(0.5, 'FINAL_METERS', 0);
+    audio.setStage('END_COMPLETE');
+    audio.stop();
+    audio.dispose();
+  });
+});
+
+test('Phase 7.1: emergency tunnel walls leave clear 6m interior corridor', () => {
+  const walls = finalColliders();
+  assert.equal(walls.length, 2);
+  const left = walls.find((c) => c.maxX <= 0)!;
+  const right = walls.find((c) => c.minX >= 0)!;
+  assert.equal(left.maxX, -3);
+  assert.equal(right.minX, 3);
+});
+

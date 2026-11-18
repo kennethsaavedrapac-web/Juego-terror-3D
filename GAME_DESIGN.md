@@ -243,3 +243,37 @@ Verificación manual en hardware objetivo:
 5. Comprobar con auriculares volumen/transición musical, legibilidad, ritmo subjetivo y fluidez en la GPU objetivo. Probar reducir movimiento/desactivar destellos. La valoración artística y el rendimiento en otros equipos requieren esta revisión humana.
 
 La secuencia de victoria listada como pendiente en la sección 10 queda sustituida por este final. Guardado persistente y estadísticas siguen fuera de alcance.
+
+---
+
+## 12. Fase 7.1 — Persecución Final Aterradora, Emergencia Industrial y Música de Créditos
+
+Mejora directa sobre la Fase 7 conservando intactos el recorrido, colisiones, checkpoint en `Z = -19.2`, victoria en `Z = -134`, inclinación de cámara hacia la fábrica, «CONTINUARÁ», nombres de créditos, dedicatoria y «VOLVER AL MENÚ».
+
+### 12.1 Túnel como zona de emergencia industrial (`finalEnvironment.ts`)
+- **Iluminación roja de emergencia**: Balizas rojas montadas en paredes y techo alternando en dos fases (`beaconMatA` / `beaconMatB`) con haces cónicos rotatorios ligeros (additive blending) y **pool dinámico de 3 `PointLight` rojas** que acompañan las estaciones cercanas al jugador para alternar zonas de luz roja intensa y bolsas oscuras sin multiplicar luces costosas.
+- **Reflejos y visibilidad controlada**: Tuberías y raíles metálicos (`metalness: 0.72, roughness: 0.36`) capturan reflejos rojizos sin ocultar el camino; en los metros finales destaca la baliza fría de salida hacia la fábrica (`Z = -134`).
+- **Señalizaciones y ambientación**: Carteles procedurales (`CanvasTexture` sRGB) de `SALIDA · EVACUACIÓN`, placas de `PELIGRO · PRESIÓN / EMERGENCIA`, flechas direccionales en el suelo, conductos y cables elevados (`Y >= 3.35 m`, sin obstaculizar la ruta), chorros de vapor en juntas de tubería y chispas eléctricas intermitentes en cuadros.
+- **Accesibilidad**: Con `Desactivar destellos ambientales`, las luces rojas pasan a brillo fijo sin oscilaciones ni chispas ni conos giratorios.
+
+### 12.2 Audio de persecución, sirenas y pasos 3D (`spatialAudio.ts`, `finalAudio.ts`, `engine.ts`)
+- **Corrección clave del listener y pasos 3D**: Durante `FINAL_ESCAPE`, `spatialAudio.update(..., { active: true, finalChaseMode: true, chaseProximity })` mantiene activo el `AudioListener` de cámara y silencia el ambiente interior de la mansión para que los **pasos pesados del monstruo**, sus gruñidos y jadeos se escuchen con nitidez detrás del jugador y se detengan en seco al llegar a la fábrica o ser capturado.
+- **Pasos corriendo (`playMonsterFootstep` con `tunnelEcho = true`)**: Zancada izquierda/derecha alternada con subgrave físico (`52–74 Hz`), crujido metálico/hormigón filtrado, mayor alcance (`refDist: 4.4`, `maxDist: 46`) y eco corto de túnel (`+85 ms`).
+- **Sirenas industriales espacializadas (`FinalAudio`)**: Dos sirenas industriales en estéreo panorámico con eco metálico de túnel (`DelayNode`), tono ascendente/descendente claro y progresión por etapas sin solapamiento descontrolado.
+- **Gruñidos, exhalaciones y cierre metálico**: Golpe pesado de bloqueo (`playTunnelLockdownSlam`) al iniciar la persecución, gruñidos intensificados según cercanía y exhalaciones guturales intercaladas.
+- **Música de persecución (138 BPM)**: Percusión industrial, subgrave pulsante y ostinato tenso con espacio espectral limpio en medios para priorizar pasos y sirenas.
+
+### 12.3 Progresión en 3 etapas, cámara y contraste de llegada (`finalSequence.ts`, `player.ts`, `engine.ts`)
+- **Etapa A (`PANIC_START`, inicio – `Z = -62`)**: Cierre metálico, alarma inicial, luces rojas, rugido a la espalda, comienzo de pasos y alerta `¡CORRE!`.
+- **Etapa B (`DESPERATE_CHASE`, `Z = -62..-102`)**: Alternancia rojo/oscuridad, doble sirena, pasos cada vez más audibles según distancia real y resonancias metálicas.
+- **Etapa C (`FINAL_METERS`, `Z = -102..-134`)**: Música intensificada, respiración acelerada del jugador, pasos muy cercanos según distancia real (sin teletransporte del monstruo) y luz fría de salida más visible adelante.
+- **Sensación física de huida**: Microvibración sutil, sacudida por trauma al impacto/cierre y ligero impulso de FOV al esprintar + viñeta roja periférica; todo atenuado automáticamente con `Reducir movimiento de cámara`.
+- **Contraste en la fábrica**: Al cruzar `Z = -134`, la persecución sonora, pasos y sirenas se cortan de forma limpia y ceden paso a un ambiente amplio y misterioso acorde con el ascenso cinematográfico de cámara.
+
+### 12.4 Nueva música de créditos y controles de volumen (`finalAudio.ts`, `audio.ts`, `PauseModal.tsx`, `index.css`)
+- **Composición rítmica de créditos (118 BPM, 27 s)**:
+  1. `0–4 s`: Introducción con motivo melódico limpio de sinte cálido y pulso rítmico inicial.
+  2. `4–20 s`: Desarrollo completo con bombo, caja, bajo sincopado, arpegio rítmico y progresión emotiva cinematográfica (`Am → F → C → G`).
+  3. `20–27 s`: Clímax con acorde de cierre definitivo (`Am9`) y fade out limpio sincronizado con el final del desplazamiento `.ending-roll` (`26.5 s`).
+- **Controles de audio compartidos**: Deslizador de **Volumen general (0–100%)** y casilla **Silenciar audio** en el menú de pausa (`PauseModal`), persistidos en `localStorage` y respetados por `audio.ts`, `spatialAudio.ts` y `finalAudio.ts`. Reiniciar desde checkpoint o volver al menú detiene y limpia todos los nodos sin pistas duplicadas.
+

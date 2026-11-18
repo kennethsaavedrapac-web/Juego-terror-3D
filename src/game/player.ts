@@ -173,7 +173,9 @@ export class FirstPersonController {
     const bob = computeHeadBob(this.distanceWalked, this.isSprinting);
     const motionScale = effects?.reducedMotion ? 0.25 : 1.0;
 
-    const targetFov = this.isSprinting ? SPRINT_FOV : BASE_FOV;
+    const chase = effects?.chaseIntensity ?? 0;
+    const panicFovBoost = this.isSprinting && !effects?.reducedMotion ? chase * 1.8 : 0;
+    const targetFov = (this.isSprinting ? SPRINT_FOV : BASE_FOV) + panicFovBoost;
     this.currentFov = THREE.MathUtils.damp(this.currentFov, targetFov, 10, dt);
     if (Math.abs(camera.fov - this.currentFov) > 0.01) {
       camera.fov = this.currentFov;
@@ -189,7 +191,6 @@ export class FirstPersonController {
     );
 
     const trauma = effects?.trauma ?? 0;
-    const chase = effects?.chaseIntensity ?? 0;
     const t = effects?.elapsed ?? 0;
     const shakeSq = trauma * trauma * motionScale;
     const chaseSway = chase * 0.011 * motionScale;
