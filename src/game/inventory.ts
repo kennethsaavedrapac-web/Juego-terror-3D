@@ -17,6 +17,8 @@ export class InventoryManager {
   private exitUnlocked = false;
   public readonly totalKeys = TOTAL_KEYS;
 
+  public relockExit() { this.exitUnlocked = false; }
+
   public reset() {
     this.collectedKeys.clear();
     this.exitUnlocked = false;
@@ -66,7 +68,7 @@ export class InventoryManager {
 
   public getObjectiveText(): string {
     if (this.exitUnlocked) {
-      return 'Salida desbloqueada.';
+      return 'ESCAPA';
     }
     if (this.collectedKeys.size >= this.totalKeys) {
       return 'Regresa a la salida.';

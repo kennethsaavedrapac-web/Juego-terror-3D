@@ -1,3 +1,7 @@
+import { FinalSequence, FACTORY_Z, FINAL_TRIGGER_Z, FINAL_MONSTER_SPEED, smooth } from './finalSequence';
+import { buildFinalEnvironment, finalColliders } from './finalEnvironment';
+import { FinalAudio } from './finalAudio';
+import { playDoorSound } from './audio';
 import { createPhase4QA } from './phase4QA';
 import { Watcher, resolveWatcherBodyCollision } from './watcher';
 import * as THREE from 'three';
@@ -44,6 +48,14 @@ const CAUGHT_STAGE_DURATION = 0.22;
 const ATTACK_DURATION = 1.5;
 
 export class HorrorGameEngine {
+  private qaFinalPanel?: HTMLElement;
+  private qaAutoRun = false;
+  private buildingGroup?: THREE.Group;
+  private final = new FinalSequence();
+  private finalSet!: ReturnType<typeof buildFinalEnvironment>;
+  private finalAudio = new FinalAudio();
+  private revealStart = new THREE.Quaternion();
+  private revealTarget = new THREE.Quaternion().setFromEuler(new THREE.Euler(.5,0,0,'YXZ'));
   private container: HTMLElement;
   private callbacks: GameEngineCallbacks;
   private renderer!: THREE.WebGLRenderer;
@@ -177,6 +189,15 @@ export class HorrorGameEngine {
     this.status = nextStatus;
 
     if (resetRun) {
+      const checkpoint = nextStatus === 'playing' && this.final.checkpoint && (prevStatus === 'gameover' || prevStatus === 'paused');
+      this.final.reset(checkpoint);
+      this.qaAutoRun=false;
+      if(this.buildingGroup)this.buildingGroup.visible=true;
+      this.finalAudio.stop();
+      this.callbacks.onFinalStage?.('PLAYING');
+      this.finalSet.update(-22,0,false,true);
+      this.camera.far=240;
+      this.fog.density=.036; this.fog.color.setHex(0x050608);
       this.attackSequenceActive = false;
       this.attackElapsed = 0;
       this.cameraTrauma = 0;
@@ -187,13 +208,13 @@ export class HorrorGameEngine {
       this.tension.reset();
       this.supernatural.reset();
       this.jumpscares.reset();
-      this.inventory.reset();
-      this.collectibles.reset();
+      if(checkpoint) this.inventory.relockExit();
+      else { this.inventory.reset(); this.collectibles.reset(); }
       this.doorSystem.reset();
       this.interactions.clearActive();
       this.activeNotification = null;
       this.notificationTimer = 0;
-      this.controller.reset(this.spawnPosition, this.spawnYaw);
+      this.controller.reset(checkpoint ? new THREE.Vector3(0,0,-19.2) : this.spawnPosition, checkpoint ? 0 : this.spawnYaw);
       this.prevPlayerPos.copy(this.controller.position);
       this.camera.fov = 70;
       this.camera.updateProjectionMatrix();
@@ -203,7 +224,10 @@ export class HorrorGameEngine {
       this.updateDeathOverlayDom(0, 0);
     }
 
+    if (nextStatus === 'ending') { this.controller.setActive(false); return; }
+    if (nextStatus === 'paused' || nextStatus === 'gameover') this.finalAudio.stop();
     if (nextStatus === 'playing') {
+      if (prevStatus === 'paused' && this.final.stage !== 'PLAYING') this.finalAudio.setStage(this.final.stage);
       this.spatialAudio.stopDeathAmbience();
       this.controller.setActive(!this.attackSequenceActive);
       if (prevStatus === 'title' || prevStatus === 'restarting' || resetRun) {
@@ -290,7 +314,7 @@ export class HorrorGameEngine {
     this.fog = new THREE.FogExp2(0x050608, 0.036);
     this.scene.fog = this.fog;
 
-    this.camera = new THREE.PerspectiveCamera(70, width / height, 0.1, 65);
+    this.camera = new THREE.PerspectiveCamera(70, width / height, 0.1, 240);
     this.scene.add(this.camera);
 
     this.flashlight = new FlashlightController(this.camera);
@@ -356,7 +380,10 @@ export class HorrorGameEngine {
       },
     );
     this.scene.add(level.group);
-    this.colliders = level.colliders;
+    this.buildingGroup=level.group;
+    this.finalSet = buildFinalEnvironment(textures);
+    this.scene.add(this.finalSet.group);
+    this.colliders = [...level.colliders, ...finalColliders()];
     this.doorSystem = level.doorSystem;
     this.collectibles = level.collectibles;
     this.flickerFixtures = level.flickerFixtures;
@@ -387,8 +414,13 @@ export class HorrorGameEngine {
         },
         onUnlockSuccess: () => {
           this.inventory.unlockExit();
+          this.final.unlock(this.inventory.canUnlockExit());
+          this.watcher.reset();
+          this.spatialAudio.update({dt:0,elapsed:this.elapsed,active:false,camera:this.camera,watcherActive:false,watcherPos:this.watcher.position,watcherState:this.watcher.state,tensionLevel:1,tensionIntensity:0,exhausted:false,colliders:this.colliders});
+          this.finalAudio.setStage(this.final.stage);
+          this.callbacks.onFinalStage?.(this.final.stage);
           this.pushNotification(
-            'Has desbloqueado la puerta principal de salida.',
+            'ESCAPA · Mantén Shift para correr. La salida está al fondo.',
             'key',
             4.5,
           );
@@ -415,6 +447,7 @@ export class HorrorGameEngine {
       () => {
         // Trigger 4-stage cinematic capture -> death_animation -> gameover (single trigger guard)
         if (
+          this.final.stage === 'FINAL_FACTORY_REVEAL' || this.final.stage === 'TO_BE_CONTINUED' || this.final.stage === 'END_CREDITS' || this.final.stage === 'END_COMPLETE' ||
           this.attackSequenceActive ||
           this.status === 'caught' ||
           this.status === 'death_animation' ||
@@ -422,6 +455,7 @@ export class HorrorGameEngine {
         ) {
           return;
         }
+        this.finalAudio.stop();
         this.attackSequenceActive = true;
         this.attackElapsed = 0;
         this.status = 'caught';
@@ -476,6 +510,20 @@ export class HorrorGameEngine {
     this.scene.add(this.jumpscares.group);
 
     if (import.meta.env.DEV && new URLSearchParams(location.search).get('qa') === '1') {
+      const panel=document.createElement('aside');
+      panel.style.cssText='position:fixed;left:12px;top:90px;z-index:60;background:#15232e;padding:8px;color:white;font:12px monospace';
+      panel.setAttribute('aria-label','Pruebas fase 7');
+      const add=(label:string,action:()=>void)=>{const b=document.createElement('button');b.textContent=label;b.style.cssText='padding:8px;border:1px solid #647b7b;margin:2px';b.onclick=action;panel.append(b);};
+      add('Preparar salida (3 llaves)',()=>{
+        this.setStatus('playing',true);
+        for(const id of ['key-recepcion','key-oficina','key-almacen'])this.inventory.collectKey(id);
+        this.controller.reset(new THREE.Vector3(0,0,-19.2),0);
+        this.controller.update(0,this.camera,this.colliders);this.scene.updateMatrixWorld(true);
+        this.broadcastHud(true,'Salida',this.interactions.evaluate(this.camera));
+      });
+      add('Correr recorrido QA',()=>{this.qaAutoRun=true;});
+      add('Detener carrera QA',()=>{this.qaAutoRun=false;this.controller.setQAForward(false);});
+      document.body.append(panel);this.qaFinalPanel=panel;
       this.qa = createPhase4QA(
         (x, z, yaw, enemy) => {
           this.attackSequenceActive = false;
@@ -786,6 +834,12 @@ export class HorrorGameEngine {
         this.spatialAudio.startDeathAmbience();
         this.callbacks.onGameOver();
       }
+    } else if ((this.status === 'playing' || this.status === 'ending') && this.final.stage !== 'PLAYING') {
+      // Fixed collision steps preserve real travel time on slower integrated GPUs.
+      let remaining = document.hidden ? 0 : Math.min(rawDt, .5);
+      while(remaining>0 && (this.status==='playing'||this.status==='ending')) {
+        const step=Math.min(.05,remaining); this.updateFinal(step); remaining-=step;
+      }
     } else if (this.status === 'playing') {
       const invSnap = this.inventory.getSnapshot();
       const watcherDist = this.watcher.active
@@ -874,7 +928,7 @@ export class HorrorGameEngine {
       );
       this.scene.updateMatrixWorld(true);
 
-      if (this.status === 'playing') {
+      if (this.status === 'playing' && this.final.stage === 'PLAYING') {
         this.watcher.update(
           dt,
           this.camera,
@@ -988,7 +1042,7 @@ export class HorrorGameEngine {
       }
     }
 
-    if (this.status !== 'gameover') {
+    if (this.status !== 'gameover' && this.final.stage !== 'END_CREDITS' && this.final.stage !== 'END_COMPLETE') {
       this.renderer.render(this.scene, this.camera);
       this.qa?.update(
         rawDt,
@@ -1000,12 +1054,83 @@ export class HorrorGameEngine {
       );
     }
 
-    if (this.isSoftwareGl) {
+    if(this.final.stage==='END_CREDITS'||this.final.stage==='END_COMPLETE'){
+      this.frameId=window.setTimeout(this.tick,this.final.stage==='END_COMPLETE'?250:50);
+    } else if (this.isSoftwareGl) {
       this.afterDraw(this.tick);
     } else {
       this.frameId = requestAnimationFrame(this.tick);
     }
   };
+
+  private updateFinal(dt: number) {
+    if(this.final.stage==='END_COMPLETE')return;
+    const previousStage=this.final.stage;
+    if(import.meta.env.DEV && this.qaAutoRun && this.status==='playing') this.controller.setQAForward(true);
+    const playable=previousStage==='FINAL_DOOR_OPENING'||previousStage==='FINAL_ESCAPE';
+    if(playable){
+      this.prevPlayerPos.copy(this.controller.position);
+      // Adrenaline is exclusive to the finale; normal stamina is unchanged.
+      this.controller.stamina={value:100,exhausted:false};
+      this.controller.update(dt,this.camera,this.colliders,{reducedMotion:this.settings.reducedCameraMotion,elapsed:this.elapsed});
+      this.doorSystem.update(dt,[this.controller.position]);
+      if(this.controller.consumeFlashlightPressed()) this.flashlight.toggle();
+      this.controller.consumeInteractPressed();
+      this.flashlight.update(dt);
+    }
+    if(this.buildingGroup)this.buildingGroup.visible=this.controller.position.z>-25;
+    this.elapsed+=dt;
+    this.final.update(dt,this.controller.position.z);
+    if(previousStage!==this.final.stage){
+      this.finalAudio.setStage(this.final.stage);
+      if(this.final.stage==='FINAL_FACTORY_REVEAL'){
+        this.revealStart.copy(this.camera.quaternion);
+        this.controller.setActive(false);
+        this.interactions.clearActive();
+        this.status='ending';
+        this.spatialAudio.update({dt:0,elapsed:this.elapsed,active:false,camera:this.camera,watcherActive:false,watcherPos:this.watcher.position,watcherState:this.watcher.state,tensionLevel:1,tensionIntensity:0,exhausted:false,colliders:this.colliders});
+      }
+      this.callbacks.onFinalStage?.(this.final.stage);
+    }
+    const stage=this.final.stage;
+    if(stage==='FINAL_ESCAPE'){
+      if(!this.final.chasing && this.controller.position.z<FINAL_TRIGGER_Z){
+        // Spawn only outside the actual view, with a clear 14 m head start.
+        const spawn=new THREE.Vector3(0,0,-23);
+        this.camera.updateMatrixWorld();
+        if(!this.watcher.vision.visible(this.camera,spawn,true)){
+          this.final.chasing=true; this.watcher.active=true; this.watcher.model.root.visible=true;
+          this.watcher.position.copy(spawn);
+          playDoorSound('metal','close');
+          this.spatialAudio.playMonsterGrowl(spawn,this.controller.position,this.colliders,true);
+          this.pushNotification('¡CORRE! Está furioso. Mirarlo ya no lo detiene. Mantén SHIFT.','alert',5);
+        }
+      }
+      if(this.final.chasing){
+        this.watcher.updateFinal(dt,this.controller.position,this.prevPlayerPos,FINAL_MONSTER_SPEED);
+        this.growlTimer-=dt;
+        if(this.growlTimer<=0){this.growlTimer=3.5;this.spatialAudio.playMonsterGrowl(this.watcher.position,this.controller.position,this.colliders,true);}
+      }
+    }
+    const reveal=stage==='FINAL_FACTORY_REVEAL'||stage==='TO_BE_CONTINUED';
+    if(reveal){
+      this.fog.density=THREE.MathUtils.damp(this.fog.density,.007,1.3,dt);
+      this.fog.color.lerp(new THREE.Color(0x101d28),1-Math.exp(-dt));
+      if(stage==='FINAL_FACTORY_REVEAL'){
+        this.camera.quaternion.slerpQuaternions(this.revealStart,this.revealTarget,smooth((this.final.time-1)/5));
+        // Creature remains physically behind the threshold, with a settling pose.
+        this.watcher.model.animate(dt,0,false,false,{animState:'IDLE'});
+      }
+    }
+    this.finalSet.update(this.controller.position.z,this.elapsed,reveal,this.settings.disableFlashes);
+    this.finalAudio.update(dt);
+    if(playable){
+      this.notificationTimer=Math.max(0,this.notificationTimer-dt);
+      if(!this.notificationTimer)this.activeNotification=null;
+      this.updateStaminaDom(100,false);
+      this.broadcastHud(false,'Túnel de evacuación',EMPTY_PROMPT);
+    }
+  }
 
   private afterDraw(cb: () => void) {
     const gl = this.renderer.getContext() as WebGL2RenderingContext;
@@ -1078,6 +1203,9 @@ export class HorrorGameEngine {
         this.onContextRestored,
       );
     }
+    this.finalAudio.stop();
+    this.qaFinalPanel?.remove();
+    this.finalSet?.dispose();
     this.qa?.dispose();
     this.spatialAudio.dispose();
     this.jumpscares.dispose();

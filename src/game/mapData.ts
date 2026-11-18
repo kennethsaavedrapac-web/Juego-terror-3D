@@ -213,7 +213,8 @@ export const BUILDING_WALLS: readonly WallSegmentDef[] = [
   },
   { id: 'salida-w', x1: -6.2, z1: -22.2, x2: -5.8, z2: -15.8 },
   { id: 'salida-e', x1: 5.8, z1: -22.2, x2: 6.2, z2: -15.8 },
-  { id: 'salida-n', x1: -6.2, z1: -22.2, x2: 6.2, z2: -21.8 },
+  { id: 'salida-n-left', x1: -6.2, z1: -22.2, x2: -1.4, z2: -21.8 },
+  { id: 'salida-n-right', x1: 1.4, z1: -22.2, x2: 6.2, z2: -21.8 },
 ];
 
 export const BUILDING_PILLARS: readonly { id: string; x: number; z: number }[] = [

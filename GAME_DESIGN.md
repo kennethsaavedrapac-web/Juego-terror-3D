@@ -206,3 +206,40 @@ La suite automatizada (`physics.test.ts`, `watcher.test.ts`, `watcherSurface.tes
 - Sistema de guardado / selector de dificultad o ajustes de volumen de audio.
 - Calibración fina de ritmo y dificultad tras pruebas de juego completas con humanos.
 
+
+## 11. Fase 7 — Escape y revelación industrial
+
+La salida norte conecta físicamente con un túnel: el muro continuo se divide en dos tramos dejando un vano de 2.8 m. Se conservan edificio, controles, inventario, rig articulado y secuencia de muerte.
+
+### Componentes y estados
+- `finalSequence.ts`: máquina determinista PLAYING → FINAL_DOOR_OPENING → FINAL_ESCAPE → FINAL_FACTORY_REVEAL → TO_BE_CONTINUED → END_CREDITS → END_COMPLETE. El estado de aplicación `ending` bloquea pausa, interacciones y controles durante el cierre.
+- `doors.ts`: barra y cerrojos retraíbles (0.8 s), hojas articuladas (3.2 s), refuerzos y bisagras. El bloqueo transversal permanece cuatro segundos; las hojas conservan AABB físicas después de abrirse.
+- `finalEnvironment.ts`: túnel lineal de 112 m, calculado como 5.6 m/s × 20 s, X=-3..3, Z=-22..-134. Suelo continuo, paredes físicas, costillas, tubos, conductos, cables, rejillas, manchas y balizas. El recorrido recto evita ambigüedad y atascos en curvas.
+- Fábrica escenográfica de 120 m de ancho, unos 130 m de profundidad y 62 m de alto: cuatro hileras de columnas, tres niveles de plataformas, puentes, reactores, grandes conductos y grúa suspendida. InstancedMesh comparte geometrías y materiales; vapor con partículas de textura radial suave. No es una zona de exploración.
+- `finalAudio.ts`: score original sintetizado, tensión pulsada, acordes industriales y créditos suaves, con fundidos y desconexión de nodos. Sin descargas ni pistas externas. El proyecto anterior no tenía control de volumen: se mantienen niveles conservadores y el volumen del navegador/sistema; no se afirma integración con un control inexistente.
+- `EndingOverlay.tsx` y CSS: CONTINUARÁ sobre la fábrica parcialmente visible, fundido negro, créditos centrados con transform lineal durante 26 s, un segundo negro y VOLVER AL MENÚ sin recarga. Nombres y dedicatoria conservados literalmente. Las animaciones se suspenden con la pestaña oculta.
+
+### Persecución y checkpoint
+Abrir con tres llaves crea el checkpoint. La resistencia se sostiene exclusivamente durante el clímax (aviso de mantener Shift); el resto del juego conserva el drenaje original. Al superar Z=-37, el único Watcher aparece en Z=-23 cuando ese punto queda fuera del encuadre. Corre a 5.95 m/s frente a 5.6 m/s del jugador, con aproximadamente 14 m de ventaja inicial. Se reutilizan rig RUN, pisadas, colisiones y alcance letal de 2.65 m. La alerta «¡CORRE! Está furioso. Mirarlo ya no lo detiene» explica la excepción a la mirada. Detenerse permite captura y activa la animación de muerte existente.
+
+Reintentar desde muerte (o reiniciar desde pausa con checkpoint) devuelve a X=0, Z=-19.2, mirando la puerta cerrada, con tres llaves y sus coleccionables ya ocultos. Restaura resistencia, puerta, IA, score y reloj del final. Volver al menú y comenzar otra partida borra checkpoint y llaves. El checkpoint es de sesión: no persiste al recargar.
+
+El cruce de Z=-134 se procesa antes del ataque: el enemigo queda físicamente detrás y se bloquean nuevas capturas. La cámara conserva posición y orientación de llegada, espera un segundo y realiza una interpolación suave de cinco segundos hacia la composición elevada (pitch 0.5 rad), seguida de tres segundos de contemplación. CONTINUARÁ dura cinco segundos incluyendo fundidos, con unos tres segundos de lectura; después comienzan los créditos sin pantalla de victoria.
+
+### Rendimiento y pruebas
+El edificio deja de dibujarse al avanzar por el túnel. Durante créditos/cierre no se ejecuta render WebGL ni esperas GPU; el reloj se consulta a 20 Hz y a 4 Hz después del cierre. Las físicas del final usan subpasos de hasta 50 ms con presupuesto de 500 ms para mantener duración en equipos lentos sin atravesar paredes. Dos geometrías principales compartidas, luces sin sombras nuevas. El reloj no avanza con la pestaña oculta.
+
+`phase7.test.ts` comprueba bloqueo sin llaves, raycast real de apertura, colisiones de hojas, recorrido completo desde vestíbulo hasta fábrica, duración calculada, supervivencia a 30/60/120 FPS, captura al detenerse, pisadas del rig, checkpoint/rebloqueo y secuencia de estados. Se actualiza la expectativa antigua del objetivo a ESCAPA. Las pruebas anteriores se conservan: 50 pruebas en total.
+
+QA de desarrollo: abrir `/?autostart=1&qa=1`, pulsar «Preparar salida (3 llaves)», E y «Correr recorrido QA». La carrera usa la entrada W+Shift del controlador: no teletransporta por el túnel ni omite estados. «Detener carrera QA» permite comprobar captura. Los controles QA no se montan en producción.
+
+Validación en navegador realizada: apertura y acceso físico, carrera completa hasta créditos, captura al detenerse, pantalla de muerte existente, reintento con 3/3 y puerta cerrada, segundo escape, revelación 3D, contenido de créditos y regreso al menú sin recarga. Sin errores críticos en consola durante el recorrido. Se observaron aproximadamente 60 FPS y 7 draw calls en la vista de revelación en este navegador; no constituye garantía para otros equipos.
+
+Verificación manual en hardware objetivo:
+1. Sin llaves, intentar E en salida; con tres, observar barra, candados y apertura lenta. Mantener W durante apertura para comprobar bloqueo.
+2. Correr con W+Shift y mirar atrás: la criatura continúa corriendo con piernas/brazos articulados. Detenerse y morir; REINTENTAR debe mostrar 3/3 ante salida cerrada. Repetir dos veces.
+3. Completar el recorrido: observar continuidad de cámara, tilt lento, niveles elevados y pausa final. No debe poder moverse ni interactuar.
+4. Verificar CONTINUARÁ, fundido negro, desplazamiento de créditos y dedicatoria completa. Esperar a que salga por arriba y regresar al menú. Iniciar otra partida debe mostrar 0/3.
+5. Comprobar con auriculares volumen/transición musical, legibilidad, ritmo subjetivo y fluidez en la GPU objetivo. Probar reducir movimiento/desactivar destellos. La valoración artística y el rendimiento en otros equipos requieren esta revisión humana.
+
+La secuencia de victoria listada como pendiente en la sección 10 queda sustituida por este final. Guardado persistente y estadísticas siguen fuera de alcance.

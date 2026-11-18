@@ -323,6 +323,20 @@ export function createDoorSystem(
   };
   colliders.push(exitCollider);
 
+  // Reinforced panels and hinges share existing worn-metal materials.
+  for (const [pivot, side] of [[exitPivotL, 1], [exitPivotR, -1]] as const) {
+    for (const y of [.3, .8, 1.8, 2.2]) {
+      const rib = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.1,.065,.1)), darkTrimMat);
+      rib.position.set(side*.59,y,.1); pivot.add(rib);
+    }
+    for (const y of [.3, 1.25, 2.15]) {
+      const hinge = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(.07,.07,.25,8)), handleMat);
+      hinge.position.set(0,y,.08); pivot.add(hinge);
+    }
+  }
+  const exitLeaves = [exitLeafL, exitLeafR].map((_,i): AABBCollider => ({id:'exit-leaf-'+i,minX:0,maxX:0,minZ:0,maxZ:0,kind:'door',active:false}));
+  colliders.push(...exitLeaves);
+  let exitOpeningTime = 0;
   let exitUnlocked = false;
   let exitCurrentAngle = 0;
   let exitTargetAngle = 0;
@@ -394,7 +408,7 @@ export function createDoorSystem(
           return {
             visible: true,
             keyLabel: 'E',
-            text: 'Presiona E para desbloquear la salida',
+            text: 'DESBLOQUEAR SALIDA',
             locked: false,
           };
         }
@@ -414,9 +428,9 @@ export function createDoorSystem(
         }
         exitUnlocked = true;
         exitTargetAngle = Math.PI * 0.44;
-        crossbar.visible = false;
+        crossbar.visible = true;
         for (const lock of padlocks) {
-          lock.visible = false;
+          lock.visible = true;
         }
         playExitUnlockSound();
         exitHooks.onUnlockSuccess();
@@ -449,17 +463,19 @@ export function createDoorSystem(
       d.collider.active = Math.abs(d.currentAngle) < 1.25;
     }
 
-    const exitDiff = exitTargetAngle - exitCurrentAngle;
-    if (Math.abs(exitDiff) > 0.002) {
-      exitCurrentAngle = THREE.MathUtils.damp(exitCurrentAngle, exitTargetAngle, 6.5, dt);
-      exitPivotL.rotation.y = exitCurrentAngle;
-      exitPivotR.rotation.y = -exitCurrentAngle;
-    } else if (exitCurrentAngle !== exitTargetAngle) {
-      exitCurrentAngle = exitTargetAngle;
-      exitPivotL.rotation.y = exitCurrentAngle;
-      exitPivotR.rotation.y = -exitCurrentAngle;
-    }
-    exitCollider.active = Math.abs(exitCurrentAngle) < 0.38;
+    if (exitUnlocked) exitOpeningTime = Math.min(4, exitOpeningTime + dt);
+    const t = Math.max(0, Math.min(1, (exitOpeningTime - .8) / 3.2));
+    exitCurrentAngle = exitTargetAngle * t*t*(3-2*t);
+    exitPivotL.rotation.y = exitCurrentAngle;
+    exitPivotR.rotation.y = -exitCurrentAngle;
+    crossbar.position.x = Math.min(1,exitOpeningTime/.8)*1.9;
+    crossbar.visible = exitOpeningTime < .8;
+    padlocks.forEach(lock => { lock.position.y = 1.1-Math.min(.6,exitOpeningTime); lock.visible=exitOpeningTime<.8; });
+    exitCollider.active = exitOpeningTime < 4;
+    [exitLeafL,exitLeafR].forEach((leaf,i)=>{
+      leaf.updateWorldMatrix(true,false); bounds.setFromObject(leaf);
+      Object.assign(exitLeaves[i],{minX:bounds.min.x,maxX:bounds.max.x,minZ:bounds.min.z,maxZ:bounds.max.z,active:true});
+    });
   };
 
   const reset = () => {
@@ -472,6 +488,9 @@ export function createDoorSystem(
       d.collider.active = true;
       Object.assign(d.leafCollider, getDoorClosedCollider(d.def), { id: `${d.def.id}-leaf` });
     }
+    exitOpeningTime = 0;
+    exitLeaves.forEach(c=>c.active=false);
+    crossbar.position.x=0;
     exitUnlocked = false;
     exitCurrentAngle = 0;
     exitTargetAngle = 0;
@@ -481,6 +500,7 @@ export function createDoorSystem(
     crossbar.visible = true;
     for (const lock of padlocks) {
       lock.visible = true;
+      lock.position.y = 1.1;
     }
   };
 

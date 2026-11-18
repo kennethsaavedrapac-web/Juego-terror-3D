@@ -85,6 +85,12 @@ export class FirstPersonController {
     }
   }
 
+  public setQAForward(enabled: boolean) {
+    if (!import.meta.env.DEV) return;
+    if(enabled){this.keysPressed.add('KeyW');this.keysPressed.add('ShiftLeft');}
+    else {this.keysPressed.delete('KeyW');this.keysPressed.delete('ShiftLeft');}
+  }
+
   public clearInputs() {
     this.keysPressed.clear();
     this.interactQueued = false;

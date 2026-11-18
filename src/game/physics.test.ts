@@ -274,7 +274,7 @@ test('InventoryManager tracks 3 keys, prevents duplicates, updates objective, an
   assert.equal(inv.canUnlockExit(), true);
   assert.equal(inv.unlockExit(), true);
   assert.equal(inv.isExitUnlocked(), true);
-  assert.equal(inv.getObjectiveText(), 'Salida desbloqueada.');
+  assert.equal(inv.getObjectiveText(), 'ESCAPA');
 
   inv.reset();
   assert.equal(inv.getSnapshot().keysCollected, 0);

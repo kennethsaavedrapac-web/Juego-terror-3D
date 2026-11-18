@@ -49,3 +49,23 @@
     transform: translateY(-1px);
   }
 }
+
+/* Phase 7: composited transforms, no layout work per credit frame. */
+.ending-letterbox { position:fixed; inset:0; z-index:35; pointer-events:none; border-block:7vh solid #000; animation:endingBars 1.5s ease both; }
+@keyframes endingBars { from {border-block-width:0} }
+.ending-continued { position:fixed; inset:0; z-index:45; display:grid; place-items:center; background:#0006; animation:endingFade 5s linear both; }
+.ending-continued h1 { color:#eee; font-family:Georgia,serif; font-weight:400; font-size:clamp(1.5rem,5vw,4.5rem); letter-spacing:.24em; margin-left:.24em; animation:endingTitle 5s ease both; }
+@keyframes endingTitle { 0%,100% {opacity:0} 20%,70% {opacity:1} }
+@keyframes endingFade { 0% {background:#0000} 20%,70% {background:#0006} 100% {background:#000} }
+.ending-black { position:fixed; inset:0; z-index:50; background:#000; overflow:hidden; color:#eee; }
+.ending-roll { position:absolute; top:100%; width:100%; text-align:center; padding:0 1.5rem; will-change:transform; animation:endingScroll 26s linear both; font-family:Georgia,serif; }
+.ending-roll h2 { font-weight:400; letter-spacing:.15em; font-size:clamp(1.1rem,3vw,1.8rem); margin:0 0 4rem; }
+.ending-roll p { font-size:clamp(1.2rem,3.2vw,2.2rem); font-weight:400; margin:0 0 3rem; line-height:1.5; }
+.ending-roll .ending-dedication { font-size:clamp(1rem,2.5vw,1.6rem); margin:6rem auto 0; max-width:90%; padding-bottom:2rem; }
+@keyframes endingScroll { to {transform:translateY(calc(-100% - 100vh))} }
+.ending-complete { display:grid; place-items:center; }
+.ending-complete button { color:#ddd; border:1px solid #ffffff30; padding:1rem 2rem; font-size:.75rem; letter-spacing:.2em; cursor:pointer; animation:endingBars 1s ease; }
+.ending-complete button:hover { background:#ffffff12; }
+
+.ending-roll, .ending-continued, .ending-continued h1 { animation-play-state:var(--ending-play-state,running); }
+body[data-state='ending'] aside[aria-label^='Pruebas fase'] { display:none; }

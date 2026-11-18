@@ -1,3 +1,5 @@
+import { EndingOverlay } from './components/EndingOverlay';
+import type { FinalStage } from './game/finalSequence';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { DeathScreen } from './components/DeathScreen';
 import { GameHud } from './components/GameHud';
@@ -35,6 +37,7 @@ function loadAccessibilitySettings(): AccessibilitySettings {
 }
 
 export default function App() {
+  const [finalStage, setFinalStage] = useState<FinalStage>('PLAYING');
   const initialAutostart = shouldAutostart();
   const [status, setStatus] = useState<GameStatus>(
     initialAutostart ? 'playing' : 'title',
@@ -94,6 +97,10 @@ export default function App() {
     document.body.dataset.state = statusRef.current;
 
     const engine = new HorrorGameEngine(mountEl, {
+      onFinalStage: (stage) => {
+        setFinalStage(stage);
+        if (['FINAL_FACTORY_REVEAL','TO_BE_CONTINUED','END_CREDITS','END_COMPLETE'].includes(stage)) { statusRef.current='ending'; setStatus('ending'); }
+      },
       onCaught: () => {
         setActiveNote(null);
         statusRef.current = 'caught';
@@ -274,6 +281,8 @@ export default function App() {
           showDeathOverlays ? 'block' : 'hidden'
         }`}
       />
+
+      <EndingOverlay stage={finalStage} onMenu={handleReturnToTitle} />
 
       {webglError && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#06070a] p-6 text-center">

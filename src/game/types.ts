@@ -1,4 +1,5 @@
 export type GameStatus =
+  | 'ending'
   | 'title'
   | 'playing'
   | 'paused'
@@ -171,6 +172,7 @@ export interface AccessibilitySettings {
 }
 
 export interface GameEngineCallbacks {
+  onFinalStage?: (stage: import('./finalSequence').FinalStage) => void;
   onCaught: () => void;
   onDeathAnimation: () => void;
   onGameOver: () => void;
