@@ -1,5 +1,10 @@
 import { getEffectiveVolume, getSharedAudioContext, subscribeAudioSettings } from './audio';
-import type { FinalChasePhase, FinalStage } from './finalSequence';
+import type {
+  ChaseIntensityLevel,
+  FinalChasePhase,
+  FinalCinematicState,
+  FinalStage,
+} from './finalSequence';
 
 const CHASE_STEP_SEC = 60 / 138 / 2; // 138 BPM 8th notes (~0.2174s)
 const CREDITS_EIGHTH_SEC = 60 / 118 / 2; // 118 BPM 8th notes (~0.2542s)
@@ -41,18 +46,21 @@ function createNoiseBuffer(ctx: AudioContext, seconds = 1.5): AudioBuffer {
 }
 
 /**
- * Original multi-stage synthesized score for Phase 7 & 7.1:
+ * Original multi-stage synthesized score for Phase 7 / 7.1 / 7.3:
  * - FINAL_DOOR_OPENING: heavy lockdown power-up tension
- * - FINAL_ESCAPE: dual spatial industrial sirens, 138 BPM chase percussion/bass, metallic impacts
+ * - FINAL_ESCAPE: layered dynamic mix (ambience, sirens, percussion, FX) escalated across Levels 1..4 without track restarts
  * - FINAL_FACTORY_REVEAL / TO_BE_CONTINUED: vast cavernous awe contrast
- * - END_CREDITS: 118 BPM cinematic modern rhythmic finale (Intro 0-4s -> Groove 4-20s -> Climax & Resolve 20-27s)
+ * - END_CREDITS: 118 BPM cinematic modern rhythmic finale
  */
 export class FinalAudio {
   private voices: AudioScheduledSourceNode[] = [];
   private nodes: AudioNode[] = [];
   private bus?: GainNode;
+  private limiter?: DynamicsCompressorNode;
+  private ambienceBus?: GainNode;
   private sirenBus?: GainNode;
   private musicBus?: GainNode;
+  private fxBus?: GainNode;
   private sirenOscA?: OscillatorNode;
   private sirenOscB?: OscillatorNode;
   private sirenGainA?: GainNode;
@@ -61,7 +69,9 @@ export class FinalAudio {
 
   private pulse = 0;
   private stage: FinalStage = 'PLAYING';
+  private cinematicState: FinalCinematicState = 'INACTIVE';
   private chasePhase: FinalChasePhase = 'NONE';
+  private chaseLevel: ChaseIntensityLevel = 1;
   private threatProximity = 0;
   private stepAccum = 0;
   private stepIndex = 0;
@@ -69,6 +79,7 @@ export class FinalAudio {
   private creditsStep = 0;
   private creditsResolved = false;
   private industrialClangTimer = 3.2;
+  private steamBurstTimer = 4.2;
   private unsubVolume: (() => void) | null = null;
   private baseBusLevel = 0.72;
 
@@ -108,6 +119,7 @@ export class FinalAudio {
   setStage(stage: FinalStage) {
     this.stop();
     this.stage = stage;
+    this.cinematicState = 'INACTIVE';
     this.pulse = 0;
     this.stepAccum = 0;
     this.stepIndex = 0;
@@ -115,7 +127,9 @@ export class FinalAudio {
     this.creditsStep = 0;
     this.creditsResolved = false;
     this.industrialClangTimer = 2.6;
+    this.steamBurstTimer = 3.4;
     this.chasePhase = 'NONE';
+    this.chaseLevel = 1;
     this.threatProximity = 0;
 
     if (stage === 'PLAYING' || stage === 'END_COMPLETE') return;
@@ -128,20 +142,30 @@ export class FinalAudio {
     this.baseBusLevel = stage === 'END_CREDITS' ? 0.85 : 0.78;
     bus.gain.setValueAtTime(0.0001, now);
     bus.gain.linearRampToValueAtTime(this.baseBusLevel * getEffectiveVolume(), now + 0.35);
+
+    const limiter = ctx.createDynamicsCompressor();
+    limiter.threshold.value = -12;
+    limiter.knee.value = 12;
+    limiter.ratio.value = 8;
+    limiter.attack.value = 0.004;
+    limiter.release.value = 0.16;
+    limiter.connect(bus);
     bus.connect(ctx.destination);
+    this.limiter = limiter;
+    this.nodes.push(limiter);
 
     if (stage === 'FINAL_DOOR_OPENING') {
-      this.startDoorOpeningLayer(ctx, bus, now);
+      this.startDoorOpeningLayer(ctx, limiter, now);
     } else if (stage === 'FINAL_ESCAPE') {
-      this.startEscapeLayer(ctx, bus, now);
+      this.startEscapeLayer(ctx, limiter, now);
     } else if (stage === 'FINAL_FACTORY_REVEAL' || stage === 'TO_BE_CONTINUED') {
-      this.startFactoryAmbienceLayer(ctx, bus, now);
+      this.startFactoryAmbienceLayer(ctx, limiter, now);
     } else if (stage === 'END_CREDITS') {
-      this.startCreditsLayer(ctx, bus, now);
+      this.startCreditsLayer(ctx, limiter, now);
     }
   }
 
-  private startDoorOpeningLayer(ctx: AudioContext, bus: GainNode, now: number) {
+  private startDoorOpeningLayer(ctx: AudioContext, bus: AudioNode, now: number) {
     // Rising emergency power-up drone + ominous sub-bass swell
     const freqs = [46.25, 69.3, 138.59];
     freqs.forEach((f, i) => {
@@ -159,14 +183,24 @@ export class FinalAudio {
     });
   }
 
-  private startEscapeLayer(ctx: AudioContext, bus: GainNode, now: number) {
+  private startEscapeLayer(ctx: AudioContext, dest: AudioNode, now: number) {
+    const ambienceBus = ctx.createGain();
+    ambienceBus.gain.setValueAtTime(0.65, now);
+    ambienceBus.connect(dest);
+    this.ambienceBus = ambienceBus;
+
     const musicBus = ctx.createGain();
-    musicBus.gain.setValueAtTime(0.85, now);
-    musicBus.connect(bus);
+    musicBus.gain.setValueAtTime(0.0001, now);
+    musicBus.connect(dest);
     this.musicBus = musicBus;
 
+    const fxBus = ctx.createGain();
+    fxBus.gain.setValueAtTime(0.85, now);
+    fxBus.connect(dest);
+    this.fxBus = fxBus;
+
     const sirenBus = ctx.createGain();
-    sirenBus.gain.setValueAtTime(0.95, now);
+    sirenBus.gain.setValueAtTime(0.88, now);
 
     // Metallic industrial tunnel slapback delay for sirens
     const delay = ctx.createDelay(0.5);
@@ -177,18 +211,18 @@ export class FinalAudio {
     wetLp.type = 'lowpass';
     wetLp.frequency.value = 1450;
     const wetGain = ctx.createGain();
-    wetGain.gain.value = 0.42;
+    wetGain.gain.value = 0.38;
 
-    sirenBus.connect(bus);
+    sirenBus.connect(dest);
     sirenBus.connect(delay);
     delay.connect(wetLp);
     wetLp.connect(fb);
     fb.connect(delay);
     wetLp.connect(wetGain);
-    wetGain.connect(bus);
+    wetGain.connect(dest);
 
     this.sirenBus = sirenBus;
-    this.nodes.push(musicBus, sirenBus, delay, fb, wetLp, wetGain);
+    this.nodes.push(ambienceBus, musicBus, fxBus, sirenBus, delay, fb, wetLp, wetGain);
 
     // Spatialized Left & Right Industrial Emergency Sirens
     const buildSiren = (pan: number, baseFreq: number) => {
@@ -227,24 +261,21 @@ export class FinalAudio {
     this.sirenOscB = sB.osc;
     this.sirenGainB = sB.gain;
 
-    // Dark underlying chase tension drone (sits cleanly under 180 Hz)
-    for (const [freq, amp] of [[46.25, 0.12], [92.5, 0.05]] as const) {
+    // Industrial tunnel eerie sub drone (attenuated during Stage A silence, swells on roar/chase)
+    for (const [freq, amp] of [[46.25, 0.11], [92.5, 0.045]] as const) {
       const osc = this.registerVoice(ctx.createOscillator());
       osc.type = 'triangle';
       osc.frequency.setValueAtTime(freq, now);
       const g = ctx.createGain();
       g.gain.setValueAtTime(amp, now);
       osc.connect(g);
-      g.connect(musicBus);
+      g.connect(ambienceBus);
       osc.start(now);
       this.nodes.push(g);
     }
-
-    // Kick off first warning step right away
-    this.triggerChaseStep(ctx, 0);
   }
 
-  private startFactoryAmbienceLayer(ctx: AudioContext, bus: GainNode, now: number) {
+  private startFactoryAmbienceLayer(ctx: AudioContext, bus: AudioNode, now: number) {
     // Vast, awe-inspiring cavernous factory contrast
     const notes = [36.71, 73.42, 110.0, 164.81, 220.0, 293.66];
     notes.forEach((freq, i) => {
@@ -280,7 +311,7 @@ export class FinalAudio {
     this.nodes.push(lp, ng);
   }
 
-  private startCreditsLayer(ctx: AudioContext, bus: GainNode, now: number) {
+  private startCreditsLayer(ctx: AudioContext, bus: AudioNode, now: number) {
     const musicBus = ctx.createGain();
     musicBus.gain.setValueAtTime(1.0, now);
 
@@ -314,7 +345,8 @@ export class FinalAudio {
   /** Heavy metallic lockdown slam when the chase erupts in Stage A. */
   playTunnelLockdownSlam() {
     const ctx = getSharedAudioContext();
-    if (!ctx || !this.bus) return;
+    const dest = this.fxBus || this.limiter || this.bus;
+    if (!ctx || !dest) return;
     const now = ctx.currentTime;
 
     const boom = this.registerVoice(ctx.createOscillator());
@@ -322,10 +354,10 @@ export class FinalAudio {
     boom.type = 'sine';
     boom.frequency.setValueAtTime(110, now);
     boom.frequency.exponentialRampToValueAtTime(28, now + 0.65);
-    boomGain.gain.setValueAtTime(0.42, now);
+    boomGain.gain.setValueAtTime(0.45, now);
     boomGain.gain.exponentialRampToValueAtTime(0.001, now + 0.7);
     boom.connect(boomGain);
-    boomGain.connect(this.bus);
+    boomGain.connect(dest);
     boom.start(now);
     boom.stop(now + 0.72);
 
@@ -336,10 +368,10 @@ export class FinalAudio {
       clang.type = 'triangle';
       clang.frequency.setValueAtTime(freq, now);
       clang.frequency.exponentialRampToValueAtTime(freq * 0.72, now + 0.55);
-      cg.gain.setValueAtTime(0.11, now);
+      cg.gain.setValueAtTime(0.12, now);
       cg.gain.exponentialRampToValueAtTime(0.001, now + 0.58);
       clang.connect(cg);
-      cg.connect(this.bus);
+      cg.connect(dest);
       clang.start(now);
       clang.stop(now + 0.6);
     }
@@ -351,18 +383,19 @@ export class FinalAudio {
     bp.frequency.setValueAtTime(920, now);
     bp.Q.value = 1.4;
     const ng = ctx.createGain();
-    ng.gain.setValueAtTime(0.28, now);
+    ng.gain.setValueAtTime(0.3, now);
     ng.gain.exponentialRampToValueAtTime(0.001, now + 0.42);
     noise.connect(bp);
     bp.connect(ng);
-    ng.connect(this.bus);
+    ng.connect(dest);
     noise.start(now);
     noise.stop(now + 0.44);
   }
 
   private playIndustrialClang(pan: number) {
     const ctx = getSharedAudioContext();
-    if (!ctx || !this.bus) return;
+    const dest = this.fxBus || this.limiter || this.bus;
+    if (!ctx || !dest) return;
     const now = ctx.currentTime;
     const osc = this.registerVoice(ctx.createOscillator());
     const bp = ctx.createBiquadFilter();
@@ -379,7 +412,7 @@ export class FinalAudio {
     bp.Q.value = 3.2;
 
     g.gain.setValueAtTime(0.001, now);
-    g.gain.linearRampToValueAtTime(0.09, now + 0.015);
+    g.gain.linearRampToValueAtTime(0.095, now + 0.015);
     g.gain.exponentialRampToValueAtTime(0.001, now + 0.38);
 
     osc.connect(bp);
@@ -387,36 +420,78 @@ export class FinalAudio {
     if (panner) {
       panner.pan.value = pan;
       g.connect(panner);
-      panner.connect(this.bus);
+      panner.connect(dest);
     } else {
-      g.connect(this.bus);
+      g.connect(dest);
     }
     osc.start(now);
     osc.stop(now + 0.4);
   }
 
+  private playSteamBurst(pan: number) {
+    const ctx = getSharedAudioContext();
+    const dest = this.fxBus || this.limiter || this.bus;
+    if (!ctx || !dest) return;
+    const now = ctx.currentTime;
+    const dur = 0.55;
+    const src = this.registerVoice(ctx.createBufferSource());
+    src.buffer = this.getNoise(ctx);
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'bandpass';
+    hp.frequency.setValueAtTime(2800, now);
+    hp.frequency.exponentialRampToValueAtTime(1400, now + dur);
+    hp.Q.value = 1.2;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.001, now);
+    g.gain.linearRampToValueAtTime(0.075, now + 0.03);
+    g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+
+    const panner = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+    src.connect(hp);
+    hp.connect(g);
+    if (panner) {
+      panner.pan.value = pan;
+      g.connect(panner);
+      panner.connect(dest);
+    } else {
+      g.connect(dest);
+    }
+    src.start(now);
+    src.stop(now + dur + 0.02);
+  }
+
   private triggerChaseStep(ctx: AudioContext, step: number) {
     if (!this.musicBus) return;
     const now = ctx.currentTime;
-    const phase = this.chasePhase;
-    const isFinalMeters = phase === 'FINAL_METERS';
-    const isDesperate = phase === 'DESPERATE_CHASE' || isFinalMeters;
+    const lvl = this.chaseLevel;
+    const inRoarPrep = this.cinematicState === 'MONSTER_ROAR' || this.cinematicState === 'CAMERA_TURN_FORWARD';
+    const isLevel2Plus = lvl >= 2;
+    const isLevel3Plus = lvl >= 3;
+    const isLevel4 = lvl === 4;
 
-    // 1. Sub kick on beats 0, 2, 4, 6 (plus urgent off-beat push in Stage C)
-    if (step % 2 === 0 || (isFinalMeters && step % 8 === 7)) {
+    // 1. Sub kick: sparse ominous heartbeat in Level 1/Roar, driving four-on-the-floor + urgent push in Levels 2-4
+    const playKick = inRoarPrep
+      ? step % 4 === 0
+      : lvl === 1
+        ? step % 4 === 0 || step % 8 === 6
+        : step % 2 === 0 || (isLevel4 && step % 8 === 7);
+
+    if (playKick) {
       const kick = this.registerVoice(ctx.createOscillator());
       const kg = ctx.createGain();
       kick.type = 'sine';
-      kick.frequency.setValueAtTime(isFinalMeters ? 125 : 108, now);
+      kick.frequency.setValueAtTime(isLevel4 ? 128 : isLevel2Plus ? 114 : 96, now);
       kick.frequency.exponentialRampToValueAtTime(34, now + 0.14);
       kg.gain.setValueAtTime(0.001, now);
-      kg.gain.linearRampToValueAtTime(isDesperate ? 0.24 : 0.18, now + 0.008);
+      kg.gain.linearRampToValueAtTime(isLevel3Plus ? 0.24 : 0.17, now + 0.008);
       kg.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
       kick.connect(kg);
       kg.connect(this.musicBus);
       kick.start(now);
       kick.stop(now + 0.17);
     }
+
+    if (inRoarPrep) return;
 
     // 2. Driving dark bass pulse (F#1 / G1 tension oscillation)
     const bassFreq = step % 16 >= 12 ? 49.0 : step % 8 >= 6 ? 55.0 : 46.25;
@@ -426,9 +501,9 @@ export class FinalAudio {
     bass.type = 'sawtooth';
     bass.frequency.setValueAtTime(bassFreq, now);
     lp.type = 'lowpass';
-    lp.frequency.setValueAtTime(isFinalMeters ? 290 : isDesperate ? 240 : 190, now);
+    lp.frequency.setValueAtTime(isLevel4 ? 300 : isLevel3Plus ? 255 : isLevel2Plus ? 215 : 175, now);
     bg.gain.setValueAtTime(0.001, now);
-    bg.gain.linearRampToValueAtTime(step % 2 === 0 ? 0.13 : 0.085, now + 0.015);
+    bg.gain.linearRampToValueAtTime(step % 2 === 0 ? 0.125 : 0.08, now + 0.015);
     bg.gain.exponentialRampToValueAtTime(0.001, now + CHASE_STEP_SEC * 0.92);
     bass.connect(lp);
     lp.connect(bg);
@@ -436,17 +511,17 @@ export class FinalAudio {
     bass.start(now);
     bass.stop(now + CHASE_STEP_SEC);
 
-    // 3. Industrial metallic snare/clack on backbeats (2 & 6) + high pulse in Stage B/C
-    if (step % 4 === 2 || (isDesperate && step % 2 === 1)) {
+    // 3. Industrial metallic snare/clack layers intensify cleanly at Levels 2, 3, 4
+    if ((isLevel2Plus && step % 4 === 2) || (isLevel3Plus && step % 2 === 1)) {
       const isBackbeat = step % 4 === 2;
       const noise = this.registerVoice(ctx.createBufferSource());
       noise.buffer = this.getNoise(ctx);
       const hp = ctx.createBiquadFilter();
       hp.type = isBackbeat ? 'bandpass' : 'highpass';
-      hp.frequency.value = isBackbeat ? 1850 : 3200;
+      hp.frequency.value = isBackbeat ? 1950 : 3400;
       hp.Q.value = isBackbeat ? 1.5 : 0.9;
       const ng = ctx.createGain();
-      ng.gain.setValueAtTime(isBackbeat ? (isDesperate ? 0.13 : 0.09) : 0.035, now);
+      ng.gain.setValueAtTime(isBackbeat ? (isLevel4 ? 0.14 : 0.1) : isLevel4 ? 0.048 : 0.032, now);
       ng.gain.exponentialRampToValueAtTime(0.001, now + (isBackbeat ? 0.12 : 0.055));
       noise.connect(hp);
       hp.connect(ng);
@@ -455,20 +530,20 @@ export class FinalAudio {
       noise.stop(now + 0.13);
     }
 
-    // 4. Urgent high tension synth ostinato in Stage B & C (leaves 300-1300Hz clear for footsteps & sirens!)
-    if (isDesperate && step % 2 === 0) {
-      const ostFreq = isFinalMeters ? (step % 4 === 0 ? 740 : 880) : (step % 4 === 0 ? 587.33 : 659.25);
+    // 4. Urgent high rhythmic synth ostinato in Levels 3 & 4 (keeps 320-1300Hz clear for footsteps & sirens!)
+    if (isLevel3Plus && (isLevel4 || step % 2 === 0)) {
+      const ostFreq = isLevel4 ? (step % 4 === 0 ? 740 : 880) : step % 4 === 0 ? 587.33 : 659.25;
       const ost = this.registerVoice(ctx.createOscillator());
       const og = ctx.createGain();
       ost.type = 'triangle';
       ost.frequency.setValueAtTime(ostFreq, now);
       og.gain.setValueAtTime(0.001, now);
-      og.gain.linearRampToValueAtTime(isFinalMeters ? 0.05 : 0.032, now + 0.012);
-      og.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+      og.gain.linearRampToValueAtTime(isLevel4 ? 0.048 : 0.032, now + 0.012);
+      og.gain.exponentialRampToValueAtTime(0.001, now + 0.13);
       ost.connect(og);
       og.connect(this.musicBus);
       ost.start(now);
-      ost.stop(now + 0.15);
+      ost.stop(now + 0.14);
     }
   }
 
@@ -687,9 +762,17 @@ export class FinalAudio {
     }
   }
 
-  update(dt: number, chasePhase: FinalChasePhase = 'NONE', threatProximity = 0) {
+  update(
+    dt: number,
+    chasePhase: FinalChasePhase = 'NONE',
+    threatProximity = 0,
+    chaseLevel: ChaseIntensityLevel = 1,
+    cinematicState: FinalCinematicState = 'INACTIVE',
+  ) {
     this.pulse += dt;
     this.chasePhase = chasePhase;
+    this.chaseLevel = chaseLevel;
+    this.cinematicState = cinematicState;
     this.threatProximity = threatProximity;
 
     const ctx = getSharedAudioContext();
@@ -697,45 +780,83 @@ export class FinalAudio {
     const now = ctx.currentTime;
 
     if (this.stage === 'FINAL_ESCAPE') {
-      // 1. Modulate Industrial Emergency Sirens cleanly without restarts or chaotic overlaps
+      const inPreTrigger = cinematicState === 'FINAL_ESCAPE_APPROACH';
+      const inWarningSilence =
+        cinematicState === 'FINAL_TRIGGERED' ||
+        cinematicState === 'CAMERA_TURN_BACK' ||
+        cinematicState === 'MONSTER_REVEAL';
+      const inRoarOrTurn =
+        cinematicState === 'MONSTER_ROAR' || cinematicState === 'CAMERA_TURN_FORWARD';
+      const inLiveChase =
+        cinematicState === 'FINAL_CHASE' ||
+        (cinematicState === 'INACTIVE' && chasePhase !== 'NONE');
+
+      // 1. Dynamic layer crossfades (never restarting loops)
+      const ambienceTarget = inWarningSilence
+        ? cinematicState === 'MONSTER_REVEAL'
+          ? 0.24
+          : 0.06
+        : inPreTrigger
+          ? 0.45
+          : 0.85;
+      this.ambienceBus?.gain.setTargetAtTime(ambienceTarget, now, 0.08);
+
+      const musicTarget = inLiveChase
+        ? (chaseLevel === 1 ? 0.56 : chaseLevel === 2 ? 0.72 : chaseLevel === 3 ? 0.84 : 0.94) +
+          threatProximity * 0.08
+        : inRoarOrTurn
+          ? 0.36
+          : 0.0001;
+      this.musicBus?.gain.setTargetAtTime(musicTarget, now, 0.09);
+
+      // 2. Modulate Industrial Emergency Sirens smoothly across intro roar + Levels 1..4
       if (this.sirenOscA && this.sirenGainA && this.sirenOscB && this.sirenGainB) {
-        const activeChase = chasePhase !== 'NONE';
-        const sweepA = 0.5 - 0.5 * Math.cos(this.pulse * 3.1); // ~2.0s smooth industrial sweep
-        const freqA = 290 + sweepA * 185;
-        this.sirenOscA.frequency.setTargetAtTime(freqA, now, 0.04);
+        const sweepA = 0.5 - 0.5 * Math.cos(this.pulse * (chaseLevel >= 3 ? 3.8 : 3.1));
+        this.sirenOscA.frequency.setTargetAtTime(295 + sweepA * 185, now, 0.04);
 
-        const sirenLevelA = activeChase
-          ? (chasePhase === 'FINAL_METERS' ? 0.115 : 0.095) * (0.42 + 0.58 * sweepA)
-          : 0.048 * (0.35 + 0.65 * sweepA); // Warning klaxon before monster appears
-        this.sirenGainA.gain.setTargetAtTime(sirenLevelA, now, 0.05);
+        const sirenLevelA = inRoarOrTurn
+          ? 0.072 * (0.4 + 0.6 * sweepA)
+          : inLiveChase
+            ? (chaseLevel >= 4 ? 0.115 : chaseLevel >= 3 ? 0.1 : 0.082) * (0.42 + 0.58 * sweepA)
+            : 0.0001;
+        this.sirenGainA.gain.setTargetAtTime(sirenLevelA, now, 0.06);
 
-        // Secondary spatial siren engages during Desperate Chase & Final Meters
-        const sweepB = 0.5 - 0.5 * Math.cos(this.pulse * 4.2 + 1.4);
-        const klaxonPulse = chasePhase === 'FINAL_METERS' ? (Math.sin(this.pulse * 10) > 0 ? 1.0 : 0.25) : 1.0;
-        this.sirenOscB.frequency.setTargetAtTime(340 + sweepB * 190, now, 0.04);
-        const sirenLevelB =
-          chasePhase === 'DESPERATE_CHASE'
-            ? 0.072 * (0.3 + 0.7 * sweepB)
-            : chasePhase === 'FINAL_METERS'
-              ? 0.095 * (0.35 + 0.65 * sweepB) * klaxonPulse
-              : 0.0001;
-        this.sirenGainB.gain.setTargetAtTime(sirenLevelB, now, 0.05);
+        // Secondary spatial siren engages progressively from Level 2 upward
+        const sweepB = 0.5 - 0.5 * Math.cos(this.pulse * 4.4 + 1.4);
+        const klaxonPulse = chaseLevel === 4 ? (Math.sin(this.pulse * 9.5) > 0 ? 1.0 : 0.28) : 1.0;
+        this.sirenOscB.frequency.setTargetAtTime(340 + sweepB * 195, now, 0.04);
+        const sirenLevelB = inLiveChase && chaseLevel >= 2
+          ? (chaseLevel === 2 ? 0.056 : chaseLevel === 3 ? 0.078 : 0.096) *
+            (0.35 + 0.65 * sweepB) *
+            klaxonPulse
+          : 0.0001;
+        this.sirenGainB.gain.setTargetAtTime(sirenLevelB, now, 0.06);
       }
 
-      // 2. Chase Sequencer (138 BPM)
-      this.stepAccum += dt;
-      while (this.stepAccum >= CHASE_STEP_SEC) {
-        this.stepAccum -= CHASE_STEP_SEC;
-        this.stepIndex += 1;
-        this.triggerChaseStep(ctx, this.stepIndex);
+      // 3. Chase Sequencer (138 BPM) — ticks continuously during roar prep & live chase
+      if (inRoarOrTurn || inLiveChase) {
+        this.stepAccum += dt;
+        while (this.stepAccum >= CHASE_STEP_SEC) {
+          this.stepAccum -= CHASE_STEP_SEC;
+          this.stepIndex += 1;
+          this.triggerChaseStep(ctx, this.stepIndex);
+        }
       }
 
-      // 3. Occasional industrial tunnel metallic impacts during Desperate Chase / Final Meters
-      if (chasePhase === 'DESPERATE_CHASE' || chasePhase === 'FINAL_METERS') {
+      // 4. Industrial metallic clangs (Level 2+) & pressurized steam bursts (Level 3+)
+      if (inLiveChase && chaseLevel >= 2) {
         this.industrialClangTimer -= dt;
         if (this.industrialClangTimer <= 0) {
-          this.industrialClangTimer = chasePhase === 'FINAL_METERS' ? 2.1 + Math.random() * 1.4 : 3.2 + Math.random() * 2.2;
+          this.industrialClangTimer =
+            chaseLevel === 4 ? 2.0 + Math.random() * 1.4 : 3.2 + Math.random() * 2.0;
           this.playIndustrialClang((Math.random() - 0.5) * 1.4);
+        }
+      }
+      if (inLiveChase && chaseLevel >= 3) {
+        this.steamBurstTimer -= dt;
+        if (this.steamBurstTimer <= 0) {
+          this.steamBurstTimer = chaseLevel === 4 ? 2.6 + Math.random() * 1.8 : 4.0 + Math.random() * 2.4;
+          this.playSteamBurst((Math.random() - 0.5) * 1.6);
         }
       }
     } else if (this.stage === 'END_CREDITS') {
@@ -758,8 +879,10 @@ export class FinalAudio {
     const ctx = this.bus.context;
     const now = ctx.currentTime;
     try {
-      this.musicBus?.gain.setTargetAtTime(0.02, now, 0.015);
-      this.sirenBus?.gain.setTargetAtTime(0.02, now, 0.015);
+      this.ambienceBus?.gain.setTargetAtTime(0.01, now, 0.015);
+      this.musicBus?.gain.setTargetAtTime(0.01, now, 0.015);
+      this.sirenBus?.gain.setTargetAtTime(0.01, now, 0.015);
+      this.fxBus?.gain.setTargetAtTime(0.01, now, 0.015);
       this.bus.gain.setTargetAtTime(0.02, now, 0.018);
     } catch {
       // Ignore audio context errors
@@ -771,8 +894,11 @@ export class FinalAudio {
     const voices = this.voices;
     const nodes = this.nodes;
     this.bus = undefined;
+    this.limiter = undefined;
+    this.ambienceBus = undefined;
     this.musicBus = undefined;
     this.sirenBus = undefined;
+    this.fxBus = undefined;
     this.sirenOscA = undefined;
     this.sirenOscB = undefined;
     this.sirenGainA = undefined;

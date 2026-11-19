@@ -269,6 +269,54 @@ export class Watcher {
     });
   }
 
+  /** Intro cinematic pose: breathing hard, shoulders tensing, slow menacing head lift without capture. */
+  animateReveal(dt: number, revealProgress: number, playerPos: NavPoint) {
+    const dx = playerPos.x - this.position.x;
+    const dz = playerPos.z - this.position.z;
+    const targetYaw = Math.atan2(-dx, -dz);
+    this.model.root.rotation.y = dampAngle(this.model.root.rotation.y, targetYaw, 18, dt);
+    this.currentSpeed = 0;
+    this.model.animate(dt, 0, false, false, {
+      animState: 'REVEAL',
+      revealProgress,
+      lookYawOffset: 0,
+      lookPitchOffset: 0.04,
+    });
+  }
+
+  /** Roar & pre-chase surge during MONSTER_ROAR / CAMERA_TURN_FORWARD: runs toward player with capture disabled. */
+  stepFinalIntroLunge(dt: number, playerPos: NavPoint, speed: number, aggression = 1.15) {
+    if (!this.active || this.state === 'ATTACK') return;
+    this.setState('CHASE');
+    const dx = playerPos.x - this.position.x;
+    const dz = playerPos.z - this.position.z;
+    const distance = Math.hypot(dx, dz);
+    const oldX = this.position.x;
+    const oldZ = this.position.z;
+    const step = Math.min(Math.max(0, distance - 5.5), speed * dt);
+    if (distance > 0 && step > 0) {
+      this.position.x += (dx / distance) * step;
+      this.position.z += (dz / distance) * step;
+    }
+    for (let pass = 0; pass < 2; pass++) {
+      for (const c of this.colliders) {
+        const r = resolveCircleAABB(this.position.x, this.position.z, 0.46, c);
+        this.position.x = r.x;
+        this.position.z = r.z;
+      }
+    }
+    this.position.y = 0;
+    const desiredYaw = Math.atan2(-dx, -dz);
+    this.model.root.rotation.y = dampAngle(this.model.root.rotation.y, desiredYaw, 22, dt);
+    this.currentSpeed = Math.max(speed, Math.hypot(this.position.x - oldX, this.position.z - oldZ) / Math.max(dt, 0.001));
+    this.model.animate(dt, this.currentSpeed, false, false, {
+      animState: 'RUN',
+      aggression,
+      lookYawOffset: 0,
+      onFootstep: (intensity, running) => this.hooks.onFootstep?.(intensity, running, this.position),
+    });
+  }
+
   /** Final straight corridor: violent relentless chase with same articulated rig, collision and lethal attack. */
   updateFinal(
     dt: number,
@@ -276,6 +324,7 @@ export class Watcher {
     previous: NavPoint,
     speed: number,
     aggression = 1.0,
+    allowCapture = true,
   ) {
     if (!this.active || this.state === 'ATTACK') return;
     this.setState('CHASE');
@@ -310,7 +359,7 @@ export class Watcher {
       lookYawOffset,
       onFootstep: (intensity, running) => this.hooks.onFootstep?.(intensity, running, this.position),
     });
-    if (isInsideLethalReach(this.position, previous, player, this.colliders)) {
+    if (allowCapture && isInsideLethalReach(this.position, previous, player, this.colliders)) {
       this.setState('ATTACK');
       this.onCapture();
     }

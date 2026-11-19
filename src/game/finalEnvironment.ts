@@ -1,5 +1,12 @@
 import * as THREE from 'three';
-import { FACTORY_Z, FINAL_ENTRY_Z, FINAL_LENGTH, type FinalChasePhase } from './finalSequence';
+import {
+  FACTORY_Z,
+  FINAL_ENTRY_Z,
+  FINAL_LENGTH,
+  type ChaseIntensityLevel,
+  type FinalChasePhase,
+  type FinalCinematicState,
+} from './finalSequence';
 import type { AABBCollider } from './types';
 import type { BuildingTextures } from './textures';
 
@@ -565,14 +572,31 @@ export function buildFinalEnvironment(textures: BuildingTextures) {
       disableFlashes: boolean,
       emergencyActive = false,
       chasePhase: FinalChasePhase = 'PANIC_START',
+      options?: {
+        chaseLevel?: ChaseIntensityLevel;
+        cinematicState?: FinalCinematicState;
+        monsterZ?: number;
+      },
     ) {
       fill.visible = reveal;
       steam.position.y = Math.sin(time * 0.18) * 1.5;
 
-      // Update venting tunnel steam jets
+      const cinState = options?.cinematicState ?? 'INACTIVE';
+      const level = options?.chaseLevel ?? (chasePhase === 'FINAL_METERS' ? 4 : chasePhase === 'DESPERATE_CHASE' ? 2 : 1);
+      const inWarningDim = cinState === 'FINAL_TRIGGERED';
+      const inRevealFocus =
+        cinState === 'CAMERA_TURN_BACK' ||
+        cinState === 'MONSTER_REVEAL' ||
+        cinState === 'MONSTER_ROAR';
+      const inRoarOrTurn = cinState === 'MONSTER_ROAR' || cinState === 'CAMERA_TURN_FORWARD';
+      const isActiveAlarm = emergencyActive && !inWarningDim && cinState !== 'FINAL_ESCAPE_APPROACH' && cinState !== 'CAMERA_TURN_BACK' && cinState !== 'MONSTER_REVEAL';
+
+      // Update venting tunnel steam jets (escalating density in Levels 2-4)
+      ventMat.opacity = isActiveAlarm ? 0.09 + level * 0.048 : inRevealFocus ? 0.12 : 0.08;
       const ventAttr = ventGeo.getAttribute('position') as THREE.BufferAttribute;
+      const ventSpeed = isActiveAlarm ? 1.0 + level * 0.25 : 0.9;
       for (let i = 0; i < tunnelVentCount; i++) {
-        const cycle = (time * 1.15 + i * 0.19) % 1;
+        const cycle = (time * ventSpeed + i * 0.19) % 1;
         const side = i % 2 === 0 ? -1 : 1;
         ventPos[i * 3] = ventBase[i * 3] - side * cycle * 1.1;
         ventPos[i * 3 + 1] = ventBase[i * 3 + 1] - cycle * 1.55;
@@ -580,62 +604,103 @@ export function buildFinalEnvironment(textures: BuildingTextures) {
       }
       ventAttr.needsUpdate = true;
 
-      // Smooth industrial emergency alarm waves (never rapid painful strobes)
-      const pulseA = disableFlashes ? 0.85 : 0.42 + 0.58 * (0.5 + 0.5 * Math.sin(time * 3.1));
-      const pulseB = disableFlashes ? 0.85 : 0.42 + 0.58 * (0.5 + 0.5 * Math.sin(time * 3.1 + Math.PI));
-      const emergencyGain = emergencyActive ? (chasePhase === 'FINAL_METERS' ? 1.25 : 1.0) : 0.35;
+      // Progressive industrial emergency pulse speed (calm in Level 1, urgent by Level 4, never painful strobing)
+      const pulseSpeed = level === 4 ? 4.4 : level === 3 ? 3.8 : level === 2 ? 3.3 : 2.7;
+      const pulseA = disableFlashes ? 0.85 : 0.42 + 0.58 * (0.5 + 0.5 * Math.sin(time * pulseSpeed));
+      const pulseB = disableFlashes ? 0.85 : 0.42 + 0.58 * (0.5 + 0.5 * Math.sin(time * pulseSpeed + Math.PI));
 
-      beaconMatA.emissiveIntensity = (emergencyActive ? 2.4 : 0.55) * pulseA * emergencyGain;
-      beaconMatB.emissiveIntensity = (emergencyActive ? 2.4 : 0.55) * pulseB * emergencyGain;
-      redStripMat.emissiveIntensity = (emergencyActive ? 1.35 : 0.3) * (0.72 + 0.28 * pulseA);
+      const emergencyGain = inWarningDim
+        ? 0.18
+        : cinState === 'CAMERA_TURN_BACK' || cinState === 'MONSTER_REVEAL'
+          ? 0.58
+          : inRoarOrTurn
+            ? 0.85
+            : isActiveAlarm
+              ? level === 4
+                ? 1.32
+                : level === 3
+                  ? 1.16
+                  : level === 2
+                    ? 1.0
+                    : 0.78
+              : 0.35;
 
-      const showBeams = emergencyActive && !disableFlashes;
-      beaconBeamMatA.opacity = showBeams ? 0.34 * pulseA : 0;
-      beaconBeamMatB.opacity = showBeams ? 0.34 * pulseB : 0;
+      beaconMatA.emissiveIntensity = (isActiveAlarm || inRevealFocus ? 2.3 : 0.52) * pulseA * emergencyGain;
+      beaconMatB.emissiveIntensity = (isActiveAlarm || inRevealFocus ? 2.3 : 0.52) * pulseB * emergencyGain;
+      redStripMat.emissiveIntensity = (inWarningDim ? 0.12 : isActiveAlarm ? 1.25 : 0.36) * (0.72 + 0.28 * pulseA) * (level >= 3 ? 1.18 : 1.0);
+
+      // Sector-by-sector volumetric beam activation along the tunnel
+      const activeSectorMinZ =
+        level >= 4 ? FACTORY_Z : level === 3 ? -118 : level === 2 ? -92 : -65;
+      const showBeams = (isActiveAlarm || inRoarOrTurn) && !disableFlashes;
+      const beamAlpha = level >= 3 ? 0.38 : 0.28;
+      beaconBeamMatA.opacity = showBeams ? beamAlpha * pulseA : 0;
+      beaconBeamMatB.opacity = showBeams ? beamAlpha * pulseB : 0;
       for (let i = 0; i < beamPivots.length; i++) {
         const b = beamPivots[i];
-        b.group.visible = showBeams && Math.abs(b.group.position.z - z) < 38;
+        const inActiveSector = b.group.position.z >= activeSectorMinZ;
+        b.group.visible = showBeams && inActiveSector && Math.abs(b.group.position.z - z) < 42;
         if (b.group.visible) {
-          b.group.rotation.y = b.phase + time * b.speed;
+          b.group.rotation.y = b.phase + time * b.speed * (level >= 3 ? 1.25 : 1.0);
         }
       }
 
-      // Snap the 3 pooled red PointLights to the nearest emergency stations around the player
-      let nearestIdx = 0;
-      let nearestDist = Infinity;
-      for (let i = 0; i < stationZs.length; i++) {
-        const d = Math.abs(stationZs[i] - z);
-        if (d < nearestDist) {
-          nearestDist = d;
-          nearestIdx = i;
+      if (inRevealFocus && typeof options?.monsterZ === 'number') {
+        // Dedicated Stage B/C/D framing: rim-light & front-fill the creature cleanly behind player
+        const mz = options.monsterZ;
+        const roarBoost = cinState === 'MONSTER_ROAR' ? 1.35 + 0.35 * pulseA : 1.1;
+        redLights[0].position.set(0.65, 2.75, mz + 2.2);
+        redLights[0].intensity = 14.5 * roarBoost;
+        redLights[1].position.set(-0.8, 3.2, mz - 2.6);
+        redLights[1].intensity = 16.5 * roarBoost;
+        redLights[2].position.set(0, 3.2, z - 4.0);
+        redLights[2].intensity = cinState === 'MONSTER_ROAR' ? 9.0 : 4.8;
+      } else {
+        // Snap the 3 pooled red PointLights to the nearest emergency stations around the player
+        let nearestIdx = 0;
+        let nearestDist = Infinity;
+        for (let i = 0; i < stationZs.length; i++) {
+          const d = Math.abs(stationZs[i] - z);
+          if (d < nearestDist) {
+            nearestDist = d;
+            nearestIdx = i;
+          }
+        }
+
+        const indices = [
+          Math.max(0, nearestIdx - 1),
+          nearestIdx,
+          Math.min(stationZs.length - 1, nearestIdx + 1),
+        ];
+
+        const activeLights = isActiveAlarm ? (level === 1 ? 1 : level === 2 ? 2 : 3) : 2;
+        for (let i = 0; i < 3; i++) {
+          const stIdx = indices[i];
+          const stZ = stationZs[stIdx];
+          const isA = stIdx % 2 === 0;
+          const p = isA ? pulseA : pulseB;
+          redLights[i].position.set(0, 3.35, stZ);
+          if (inWarningDim) {
+            redLights[i].intensity = i === 1 ? 1.1 : 0;
+          } else if (i >= activeLights && isActiveAlarm) {
+            redLights[i].intensity = 1.6;
+          } else {
+            redLights[i].intensity = isActiveAlarm
+              ? (disableFlashes ? 13.0 : 7.5 + 10.5 * p) * emergencyGain
+              : 4.2;
+          }
         }
       }
 
-      const indices = [
-        Math.max(0, nearestIdx - 1),
-        nearestIdx,
-        Math.min(stationZs.length - 1, nearestIdx + 1),
-      ];
+      exitBeaconLight.intensity = reveal ? 12 : level === 4 || chasePhase === 'FINAL_METERS' ? 16 : 7;
 
-      for (let i = 0; i < 3; i++) {
-        const stIdx = indices[i];
-        const stZ = stationZs[stIdx];
-        const isA = stIdx % 2 === 0;
-        const p = isA ? pulseA : pulseB;
-        redLights[i].position.set(0, 3.35, stZ);
-        redLights[i].intensity = emergencyActive
-          ? (disableFlashes ? 13.5 : 8.5 + 10.5 * p) * emergencyGain
-          : 4.5;
-      }
-
-      exitBeaconLight.intensity = reveal ? 12 : chasePhase === 'FINAL_METERS' ? 15 : 7;
-
-      // Occasional subtle electrical sparks (completely off if disableFlashes)
-      if (!disableFlashes && emergencyActive) {
-        const sparkGate = Math.sin(time * 2.3) * Math.sin(time * 5.7);
-        const burst = sparkGate > 0.78 ? (sparkGate - 0.78) / 0.22 : 0;
+      // Electrical sparks engage from Level 2 upward (completely off if disableFlashes or warning silence)
+      if (!disableFlashes && (isActiveAlarm || inRoarOrTurn) && level >= 2) {
+        const sparkGate = Math.sin(time * (level >= 3 ? 2.9 : 2.1)) * Math.sin(time * 5.7);
+        const threshold = level >= 4 ? 0.64 : level === 3 ? 0.72 : 0.8;
+        const burst = sparkGate > threshold ? (sparkGate - threshold) / (1 - threshold) : 0;
         sparks.visible = burst > 0.01;
-        sparkMat.opacity = burst * 0.85;
+        sparkMat.opacity = burst * (level >= 3 ? 0.92 : 0.72);
         if (sparks.visible) {
           const sAttr = sparkGeo.getAttribute('position') as THREE.BufferAttribute;
           const dropPhase = (time * 6) % 1;

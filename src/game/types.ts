@@ -162,9 +162,11 @@ export interface HudSnapshot {
   exitUnlocked: boolean;
   prompt: InteractPrompt;
   notification: HudNotification | null;
+  chaseBanner?: string | null;
+  finalCinematicActive?: boolean;
 }
 
-export type WatcherAnimState = 'IDLE' | 'WALK' | 'RUN' | 'FROZEN' | 'ATTACK';
+export type WatcherAnimState = 'IDLE' | 'WALK' | 'RUN' | 'FROZEN' | 'ATTACK' | 'REVEAL';
 
 export type TensionLevel = 1 | 2 | 3 | 4;
 

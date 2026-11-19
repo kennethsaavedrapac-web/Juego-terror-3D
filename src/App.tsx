@@ -60,6 +60,8 @@ export default function App() {
     exitUnlocked: false,
     prompt: { visible: false, keyLabel: 'E', text: '' },
     notification: null,
+    chaseBanner: null,
+    finalCinematicActive: false,
   });
 
   const canvasMountRef = useRef<HTMLDivElement | null>(null);

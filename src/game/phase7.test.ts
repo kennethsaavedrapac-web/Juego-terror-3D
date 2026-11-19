@@ -6,14 +6,24 @@ import * as THREE from 'three';
 import {
   FinalSequence,
   FINAL_LENGTH,
+  FINAL_INTRO_DURATIONS,
+  FINAL_LEVEL_2_Z,
+  FINAL_LEVEL_3_Z,
+  FINAL_LEVEL_4_Z,
+  FINAL_TRIGGER_Z,
   FACTORY_Z,
   FINAL_MONSTER_SPEED,
   FINAL_STAGE_B_Z,
   FINAL_STAGE_C_Z,
   END_CREDITS_DURATION,
   computeFinalChaseSpeed,
+  computeLookAnglesToTarget,
+  easeInOutCubic,
+  getChaseIntensityLevel,
   getFinalChasePhase,
   getFinalChaseMetrics,
+  isIntroCinematicState,
+  shortestAngleDelta,
   smooth,
 } from './finalSequence';
 import { finalColliders } from './finalEnvironment';
@@ -307,4 +317,175 @@ test('Phase 7.2: mastered screamer OGG and WAV audio assets exist and are non-em
   assert.ok(fs.statSync(wavPath).size > 100000, 'monster-screamer.wav is non-empty mastered audio');
 });
 
+test('Phase 7.3: 5-stage intro cinematic state machine locks control/capture safely and transitions monotonically', () => {
+  const seq = new FinalSequence();
+  assert.equal(seq.cinematicState, 'INACTIVE');
+  assert.equal(seq.isControlLocked(), false);
+  assert.equal(seq.isCaptureAllowed(), false);
 
+  assert.equal(seq.unlock(true), true);
+  assert.equal(seq.cinematicState, 'FINAL_DOOR_OPENING');
+  seq.update(4.0, -22);
+  assert.equal(seq.stage, 'FINAL_ESCAPE');
+  assert.equal(seq.cinematicState, 'FINAL_ESCAPE_APPROACH');
+  assert.equal(seq.isCaptureAllowed(), false);
+
+  // Crossing trigger starts 5-stage cinematic; duplicate trigger is ignored
+  assert.equal(seq.triggerIntroCinematic(), true);
+  assert.equal(seq.triggerIntroCinematic(), false);
+  assert.equal(seq.cinematicState, 'FINAL_TRIGGERED');
+  assert.equal(seq.isControlLocked(), true);
+  assert.equal(seq.isCaptureAllowed(), false);
+
+  const visited: string[] = [seq.cinematicState];
+  let safety = 0;
+  while (seq.cinematicState !== 'FINAL_CHASE' && safety < 400) {
+    seq.update(0.05, FINAL_TRIGGER_Z);
+    if (visited[visited.length - 1] !== seq.cinematicState) {
+      visited.push(seq.cinematicState);
+    }
+    if (isIntroCinematicState(seq.cinematicState)) {
+      assert.equal(seq.isControlLocked(), true, `Controls must stay locked in ${seq.cinematicState}`);
+      assert.equal(seq.isCaptureAllowed(), false, `Capture must stay disabled in ${seq.cinematicState}`);
+    }
+    safety++;
+  }
+
+  assert.deepEqual(visited, [
+    'FINAL_TRIGGERED',
+    'CAMERA_TURN_BACK',
+    'MONSTER_REVEAL',
+    'MONSTER_ROAR',
+    'CAMERA_TURN_FORWARD',
+    'FINAL_CHASE',
+  ]);
+  assert.equal(seq.isControlLocked(), false);
+  assert.equal(seq.isCaptureAllowed(), true);
+  assert.equal(seq.chasing, true);
+
+  // Reaching factory immediately disables capture and enters FACTORY_REVEAL
+  seq.update(0.05, FACTORY_Z);
+  assert.equal(seq.cinematicState, 'FACTORY_REVEAL');
+  assert.equal(seq.isCaptureAllowed(), false);
+
+  // Clean checkpoint restore resets cinematicState and control flags
+  seq.reset(true);
+  assert.equal(seq.stage, 'PLAYING');
+  assert.equal(seq.cinematicState, 'INACTIVE');
+  assert.equal(seq.checkpoint, true);
+  assert.equal(seq.isControlLocked(), false);
+  assert.equal(seq.isCaptureAllowed(), false);
+});
+
+test('Phase 7.3: easeInOutCubic & computeLookAnglesToTarget align camera toward monster behind player and back forward', () => {
+  assert.equal(easeInOutCubic(0), 0);
+  assert.equal(easeInOutCubic(1), 1);
+  assert.equal(easeInOutCubic(0.5), 0.5);
+  assert.ok(easeInOutCubic(0.25) < 0.25 && easeInOutCubic(0.75) > 0.75);
+
+  const playerCam = { x: 0, y: 1.68, z: -37.2 };
+  const monsterChest = { x: 0, y: 2.15, z: -23.0 };
+  const back = computeLookAnglesToTarget(playerCam, monsterChest);
+
+  // Looking directly toward +Z (monster behind) yields |yaw| ≈ PI and slight upward pitch
+  assert.ok(Math.abs(Math.abs(back.yaw) - Math.PI) < 0.01, `Expected yaw ≈ ±PI, got ${back.yaw}`);
+  assert.ok(back.pitch > 0 && back.pitch < 0.15, `Expected slight upward pitch, got ${back.pitch}`);
+  assert.ok(Math.abs(shortestAngleDelta(0, back.yaw)) > 3.13);
+
+  // Off-center player or monster still aims strictly at real target coordinates
+  const offCenter = computeLookAnglesToTarget({ x: -1.4, y: 1.68, z: -37.5 }, { x: 0.4, y: 2.15, z: -23.2 });
+  const dirX = -Math.sin(offCenter.yaw);
+  const dirZ = -Math.cos(offCenter.yaw);
+  const toTargetX = 0.4 - -1.4;
+  const toTargetZ = -23.2 - -37.5;
+  const len = Math.hypot(toTargetX, toTargetZ);
+  assert.ok(Math.abs(dirX - toTargetX / len) < 0.01 && Math.abs(dirZ - toTargetZ / len) < 0.01);
+});
+
+test('Phase 7.3: 4-level tunnel escalation and mistake pressure behave deterministically', () => {
+  assert.equal(getChaseIntensityLevel(-40), 1);
+  assert.equal(getChaseIntensityLevel(FINAL_LEVEL_2_Z), 2);
+  assert.equal(getChaseIntensityLevel(FINAL_LEVEL_3_Z), 3);
+  assert.equal(getChaseIntensityLevel(FINAL_LEVEL_4_Z), 4);
+
+  const clean = computeFinalChaseSpeed('DESPERATE_CHASE', 8, 7, { playerSpeed: SPRINT_SPEED, lookingBack: false });
+  const slowWalk = computeFinalChaseSpeed('DESPERATE_CHASE', 8, 7, { playerSpeed: WALK_SPEED, lookingBack: false });
+  const lookedBack = computeFinalChaseSpeed('DESPERATE_CHASE', 8, 7, { playerSpeed: SPRINT_SPEED, lookingBack: true });
+  assert.ok(slowWalk > clean, 'Slow walking triggers chase mistake pressure');
+  assert.ok(lookedBack > clean, 'Looking back increases monster pursuit pressure');
+});
+
+test('Phase 7.3: post-cinematic intro lunge + sprint survives cleanly at 30/60/120 FPS; FinalAudio accepts all intro states', () => {
+  for (const fps of [30, 60, 120]) {
+    const dt = 1 / fps;
+    let captures = 0;
+    const enemy = new Watcher(finalColliders(), [], () => captures++, () => {});
+    const seq = new FinalSequence();
+    seq.unlock(true);
+    seq.update(4.0, -22);
+    let pz = -37.2;
+    seq.triggerIntroCinematic();
+    enemy.active = true;
+    enemy.position.set(0, 0, Math.min(-23.0, pz + 14.4));
+
+    while (seq.cinematicState !== 'FINAL_CHASE') {
+      seq.update(dt, pz);
+      if (seq.cinematicState === 'MONSTER_ROAR') {
+        enemy.stepFinalIntroLunge(dt, { x: 0, z: pz }, 0.9, 1.2);
+      } else if (seq.cinematicState === 'CAMERA_TURN_FORWARD') {
+        enemy.stepFinalIntroLunge(dt, { x: 0, z: pz }, 1.25, 1.25);
+      } else {
+        enemy.animateReveal(dt, 0.5, { x: 0, z: pz });
+      }
+      assert.equal(captures, 0, 'No capture allowed during intro cinematic');
+    }
+
+    let chaseTime = 0;
+    while (pz > FACTORY_Z) {
+      const old = pz;
+      pz -= SPRINT_SPEED * dt;
+      chaseTime += dt;
+      if (pz > FACTORY_Z) {
+        const metrics = getFinalChaseMetrics(pz, enemy.position.z, true, 'FINAL_ESCAPE');
+        const speed = computeFinalChaseSpeed(metrics.phase, metrics.monsterDistance, chaseTime, {
+          playerSpeed: SPRINT_SPEED,
+          lookingBack: false,
+        });
+        enemy.updateFinal(dt, { x: 0, z: pz }, { x: 0, z: old }, speed, 1.2, seq.isCaptureAllowed());
+      }
+    }
+    assert.equal(captures, 0, `Clean sprint after intro cinematic must survive at ${fps} FPS`);
+    const finishGap = Math.abs(FACTORY_Z - enemy.position.z);
+    assert.ok(finishGap > 3.2 && finishGap < 6.0, `Expected tense safe finish margin (got ${finishGap.toFixed(2)}m at ${fps} FPS)`);
+    enemy.dispose();
+  }
+
+  const audio = new FinalAudio();
+  assert.doesNotThrow(() => {
+    audio.setStage('FINAL_ESCAPE');
+    for (const s of [
+      'FINAL_TRIGGERED',
+      'CAMERA_TURN_BACK',
+      'MONSTER_REVEAL',
+      'MONSTER_ROAR',
+      'CAMERA_TURN_FORWARD',
+      'FINAL_CHASE',
+    ] as const) {
+      audio.update(0.1, 'PANIC_START', 0.4, 2, s);
+    }
+    audio.dispose();
+  });
+});
+
+test('Phase 7.3: WatcherModel REVEAL pose lifts head menacingly as revealProgress goes 0 -> 1', () => {
+  const model = createWatcherModel();
+  model.animate(0.05, 0, false, false, { animState: 'REVEAL', revealProgress: 0 });
+  const initialHeadPitch = model.rig.head.rotation.x + model.rig.neck.rotation.x;
+  for (let i = 1; i <= 20; i++) {
+    model.animate(0.05, 0, false, false, { animState: 'REVEAL', revealProgress: i / 20 });
+  }
+  const liftedHeadPitch = model.rig.head.rotation.x + model.rig.neck.rotation.x;
+  assert.ok(liftedHeadPitch > initialHeadPitch + 0.3, `Head lifts upward from bowed hunch toward player (${initialHeadPitch.toFixed(2)} -> ${liftedHeadPitch.toFixed(2)})`);
+  assert.ok(FINAL_INTRO_DURATIONS.turnBack >= 0.8 && FINAL_INTRO_DURATIONS.turnForward >= 0.5);
+  model.dispose();
+});

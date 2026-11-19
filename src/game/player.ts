@@ -34,6 +34,7 @@ export class FirstPersonController {
   private bobWeight = 0;
   private currentFov = BASE_FOV;
   private active = false;
+  private controlsLocked = false;
 
   private readonly euler = new THREE.Euler(0, 0, 0, 'YXZ');
   private readonly forwardVec = new THREE.Vector3(0, 0, -1);
@@ -52,11 +53,30 @@ export class FirstPersonController {
   public setActive(active: boolean) {
     this.active = active;
     if (!active) {
+      this.controlsLocked = false;
       this.clearInputs();
       if (document.pointerLockElement === this.canvas) {
         document.exitPointerLock?.();
       }
     }
+  }
+
+  /** Temporarily locks player movement/look/interactions during cinematics without breaking Pointer Lock. */
+  public setControlsLocked(locked: boolean) {
+    this.controlsLocked = locked;
+    this.interactQueued = false;
+    this.flashlightQueued = false;
+    this.isDraggingLook = false;
+  }
+
+  /** Synchronizes internal FPS look angles and camera orientation after a scripted camera sweep. */
+  public syncCameraAngles(yaw: number, pitch: number) {
+    const clampedPitch = THREE.MathUtils.clamp(pitch, -MAX_PITCH, MAX_PITCH);
+    this.yaw = yaw;
+    this.targetYaw = yaw;
+    this.pitch = clampedPitch;
+    this.targetPitch = clampedPitch;
+    this.isDraggingLook = false;
   }
 
   public reset(spawnPos: THREE.Vector3, spawnYaw: number) {
@@ -67,6 +87,7 @@ export class FirstPersonController {
     this.targetPitch = 0;
     this.stamina = { value: 100, exhausted: false };
     this.isSprinting = false;
+    this.controlsLocked = false;
     this.distanceWalked = 0;
     this.bobWeight = 0;
     this.currentFov = BASE_FOV;
@@ -126,6 +147,16 @@ export class FirstPersonController {
       elapsed?: number;
     },
   ): { zoneName: string; forwardDir: THREE.Vector3 } {
+    if (this.controlsLocked) {
+      this.isSprinting = false;
+      this.interactQueued = false;
+      this.flashlightQueued = false;
+      return {
+        zoneName: getZoneName(this.position.x, this.position.z),
+        forwardDir: this.getLookDirectionXZ(this.forwardVec),
+      };
+    }
+
     const turnLeft = this.keysPressed.has('ArrowLeft') ? 1 : 0;
     const turnRight = this.keysPressed.has('ArrowRight') ? 1 : 0;
     if (turnLeft !== turnRight) {
@@ -221,11 +252,13 @@ export class FirstPersonController {
     ) {
       e.preventDefault();
     }
-    if (e.code === 'KeyE' && !e.repeat) {
-      this.interactQueued = true;
-    }
-    if (e.code === 'KeyF' && !e.repeat) {
-      this.flashlightQueued = true;
+    if (!this.controlsLocked) {
+      if (e.code === 'KeyE' && !e.repeat) {
+        this.interactQueued = true;
+      }
+      if (e.code === 'KeyF' && !e.repeat) {
+        this.flashlightQueued = true;
+      }
     }
     this.keysPressed.add(e.code);
   };
@@ -254,9 +287,11 @@ export class FirstPersonController {
     if (e.target !== this.canvas) return;
     if (!this.pointerLocked) {
       this.requestPointerLock();
-      this.isDraggingLook = true;
-      this.lastPointerX = e.clientX;
-      this.lastPointerY = e.clientY;
+      if (!this.controlsLocked) {
+        this.isDraggingLook = true;
+        this.lastPointerX = e.clientX;
+        this.lastPointerY = e.clientY;
+      }
     }
   };
 
@@ -265,7 +300,7 @@ export class FirstPersonController {
   };
 
   private onMouseMove = (e: MouseEvent) => {
-    if (!this.active) return;
+    if (!this.active || this.controlsLocked) return;
     let dx = 0;
     let dy = 0;
 

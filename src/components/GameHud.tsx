@@ -129,31 +129,49 @@ export const GameHud: FC<GameHudProps> = ({
         </div>
       )}
 
-      {/* Center Reticle & Contextual Interaction Prompt */}
-      <div
-        className="pointer-events-none fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
-        aria-hidden="true"
-      >
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <circle
-            cx="8"
-            cy="8"
-            r="2"
-            fill="#e5e2dc"
-            fillOpacity={hud.pointerLocked ? '0.85' : '0.45'}
-          />
-          <circle
-            cx="8"
-            cy="8"
-            r="6"
-            stroke="#000000"
-            strokeOpacity="0.45"
-            strokeWidth="1"
-          />
-        </svg>
-      </div>
+      {/* High-contrast emergency chase banner (e.g. ¡CORRE! after camera returns forward) */}
+      {hud.chaseBanner && (
+        <div
+          data-testid="chase-banner"
+          className="pointer-events-none fixed left-1/2 top-[28%] z-20 -translate-x-1/2 border border-[#dc2626]/85 bg-[#190608]/92 px-8 py-3 text-center"
+          style={{ boxShadow: '0 0 36px rgba(185, 28, 28, 0.45)' }}
+        >
+          <span
+            className="font-display block text-3xl font-bold tracking-[0.28em] text-[#fecaca] sm:text-4xl"
+            style={{ textShadow: '0 2px 12px rgba(220, 38, 38, 0.8)' }}
+          >
+            {hud.chaseBanner}
+          </span>
+        </div>
+      )}
 
-      {hud.prompt.visible && (
+      {/* Center Reticle & Contextual Interaction Prompt */}
+      {!hud.finalCinematicActive && (
+        <div
+          className="pointer-events-none fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
+          aria-hidden="true"
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <circle
+              cx="8"
+              cy="8"
+              r="2"
+              fill="#e5e2dc"
+              fillOpacity={hud.pointerLocked ? '0.85' : '0.45'}
+            />
+            <circle
+              cx="8"
+              cy="8"
+              r="6"
+              stroke="#000000"
+              strokeOpacity="0.45"
+              strokeWidth="1"
+            />
+          </svg>
+        </div>
+      )}
+
+      {!hud.finalCinematicActive && hud.prompt.visible && (
         <div
           data-testid="hud-interact-prompt"
           className="pointer-events-none fixed left-1/2 top-[56%] z-20 flex -translate-x-1/2 items-center gap-2.5 border border-white/15 bg-[#080a0e]/90 px-4 py-2 text-xs tracking-wide text-[#ece8e0]"

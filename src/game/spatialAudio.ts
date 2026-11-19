@@ -346,6 +346,8 @@ export class SpatialAudioEngine {
     colliders: readonly AABBCollider[];
     finalChaseMode?: boolean;
     chaseProximity?: number;
+    finalChaseLevel?: 1 | 2 | 3 | 4;
+    cinematicDimmed?: boolean;
   }) {
     if (!params.active) {
       if (this.masterGain && this.ctx) {
@@ -364,7 +366,7 @@ export class SpatialAudioEngine {
     if (this.silenceTimer > 0) {
       this.silenceTimer = Math.max(0, this.silenceTimer - params.dt);
     }
-    const silenceMult = this.silenceTimer > 0 ? 0.04 : 1.0;
+    const silenceMult = params.cinematicDimmed ? 0.06 : this.silenceTimer > 0 ? 0.04 : 1.0;
 
     if (params.finalChaseMode) {
       // Final tunnel emergency pursuit: suppress slow ambient building drone, focus on monster & player panic
@@ -373,11 +375,17 @@ export class SpatialAudioEngine {
       this.chasePulseGain?.gain.setTargetAtTime(0.0, now, 0.15);
 
       const prox = params.chaseProximity ?? params.tensionIntensity;
-      if (params.watcherActive && (params.tensionIntensity > 0.45 || prox > 0.25)) {
+      const level = params.finalChaseLevel ?? 1;
+      if (
+        params.watcherActive &&
+        !params.cinematicDimmed &&
+        (level >= 3 || prox > 0.52)
+      ) {
         this.playerBreathTimer -= params.dt;
         if (this.playerBreathTimer <= 0) {
-          this.playerBreathTimer = THREE.MathUtils.lerp(0.95, 0.44, Math.max(prox, params.tensionIntensity));
-          this.playPlayerBreath(0.04 + prox * 0.055);
+          const panic = Math.max(prox, (level - 2) * 0.45);
+          this.playerBreathTimer = THREE.MathUtils.lerp(0.92, 0.42, Math.min(1, panic));
+          this.playPlayerBreath(0.036 + Math.min(1, panic) * 0.055);
         }
       }
     } else {
@@ -661,6 +669,131 @@ export class SpatialAudioEngine {
       aggressive ? 3.2 : 2.0,
       aggressive ? 42 : 28,
     );
+  }
+
+  /** Powerful, non-clipping layered monster roar for Stage D of the intro cinematic. */
+  public playMonsterIntroRoar(
+    pos: THREE.Vector3,
+    listenerPos: { x: number; z: number },
+    colliders: readonly AABBCollider[],
+  ) {
+    if (!this.ensureInitialized() || !this.ctx || !this.masterGain) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    const dur = 1.42;
+    this.trackVoice(dur + 0.25);
+
+    const att = computeWallAttenuation(listenerPos, pos, colliders);
+    const dest = this.screamerLimiter || this.masterGain;
+
+    const panner = this.createPanner(ctx, 4.5, 45, 1.1);
+    this.setPannerPosition(panner, pos.x, pos.y + 2.35, pos.z, now);
+    panner.connect(dest);
+
+    const bus = ctx.createGain();
+    bus.gain.setValueAtTime(0.001, now);
+    bus.gain.linearRampToValueAtTime(0.66 * att.gainMultiplier, now + 0.07);
+    bus.gain.setValueAtTime(0.62 * att.gainMultiplier, now + 0.55);
+    bus.gain.exponentialRampToValueAtTime(0.001, now + dur);
+
+    // Subtle tunnel slapback echo
+    const delay = ctx.createDelay(0.4);
+    delay.delayTime.value = 0.11;
+    const fb = ctx.createGain();
+    fb.gain.value = 0.26;
+    const echoLp = ctx.createBiquadFilter();
+    echoLp.type = 'lowpass';
+    echoLp.frequency.value = 1250;
+
+    bus.connect(panner);
+    bus.connect(delay);
+    delay.connect(echoLp);
+    echoLp.connect(fb);
+    fb.connect(delay);
+    echoLp.connect(panner);
+
+    // 1. Sub chest resonance
+    const sub = ctx.createOscillator();
+    const subGain = ctx.createGain();
+    sub.type = 'triangle';
+    sub.frequency.setValueAtTime(76, now);
+    sub.frequency.linearRampToValueAtTime(98, now + 0.18);
+    sub.frequency.exponentialRampToValueAtTime(34, now + dur);
+    subGain.gain.setValueAtTime(0.54, now);
+    subGain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    sub.connect(subGain);
+    subGain.connect(bus);
+    sub.start(now);
+    sub.stop(now + dur + 0.02);
+
+    // 2. FM guttural vocal cords routed through sweeping jaw/throat formants
+    const shaper = ctx.createWaveShaper();
+    shaper.curve = this.distortionCurve;
+    const f1 = ctx.createBiquadFilter();
+    f1.type = 'bandpass';
+    f1.frequency.setValueAtTime(340, now);
+    f1.frequency.linearRampToValueAtTime(680, now + 0.22);
+    f1.frequency.exponentialRampToValueAtTime(220, now + dur);
+    f1.Q.value = 2.0;
+
+    const f2 = ctx.createBiquadFilter();
+    f2.type = 'bandpass';
+    f2.frequency.setValueAtTime(920, now);
+    f2.frequency.linearRampToValueAtTime(1520, now + 0.24);
+    f2.frequency.exponentialRampToValueAtTime(520, now + dur);
+    f2.Q.value = 2.4;
+
+    const mod = ctx.createOscillator();
+    const modGain = ctx.createGain();
+    mod.type = 'sine';
+    mod.frequency.value = 34;
+    modGain.gain.value = 24;
+    mod.connect(modGain);
+
+    for (const [fStart, fPeak, fEnd] of [
+      [92, 152, 52],
+      [142, 224, 78],
+    ] as const) {
+      const cord = ctx.createOscillator();
+      cord.type = 'sawtooth';
+      cord.frequency.setValueAtTime(fStart, now);
+      cord.frequency.linearRampToValueAtTime(fPeak, now + 0.16);
+      cord.frequency.exponentialRampToValueAtTime(fEnd, now + dur);
+      modGain.connect(cord.frequency);
+      cord.connect(shaper);
+      cord.start(now);
+      cord.stop(now + dur + 0.02);
+    }
+    mod.start(now);
+    mod.stop(now + dur + 0.02);
+
+    const cordGain = ctx.createGain();
+    cordGain.gain.value = 0.44;
+    shaper.connect(f1);
+    shaper.connect(f2);
+    f1.connect(cordGain);
+    f2.connect(cordGain);
+    cordGain.connect(bus);
+
+    // 3. Torn roaring air breath layer
+    if (this.noiseBuffer) {
+      const air = ctx.createBufferSource();
+      air.buffer = this.noiseBuffer;
+      const airBp = ctx.createBiquadFilter();
+      airBp.type = 'bandpass';
+      airBp.frequency.setValueAtTime(680, now);
+      airBp.frequency.linearRampToValueAtTime(1180, now + 0.2);
+      airBp.frequency.exponentialRampToValueAtTime(340, now + dur);
+      airBp.Q.value = 1.5;
+      const airGain = ctx.createGain();
+      airGain.gain.setValueAtTime(0.42, now);
+      airGain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+      air.connect(airBp);
+      airBp.connect(airGain);
+      airGain.connect(bus);
+      air.start(now);
+      air.stop(now + dur + 0.02);
+    }
   }
 
   /** Aggressive running exhalation / guttural rasp between monster roars. */

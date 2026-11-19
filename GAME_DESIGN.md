@@ -308,3 +308,33 @@ Mejora directa sobre la Fase 7.1 conservando intactos la fábrica final, la incl
   2. Desbloquear la compuerta final con 3 llaves y comprobar las 4 fases sonoras sincronizadas y el bucle continuo hasta la apertura completa.
   3. Correr la persecución del túnel con `Shift` para validar que sigue siendo superable al límite y luego detenerse o caminar para validar el screamer de captura y el reintento limpio desde checkpoint sin sonidos duplicados.
 
+---
+
+## 14. Fase 7.3 — Introducción Cinematográfica del Monstruo y Persecución Final Extrema
+
+Mejora directa sobre la Fase 7.2 conservando íntegros el edificio, las llaves, los materiales de puertas, el screamer de captura, la revelación de la fábrica, la inclinación de cámara, «CONTINUARÁ», la música/scroll de créditos y «VOLVER AL MENÚ».
+
+### 14.1 Cinemática integrada 3D en 5 etapas (`finalSequence.ts`, `player.ts`, `watcher.ts`, `watcherModel.ts`, `engine.ts`)
+Al cruzar `FINAL_TRIGGER_Z = -37` dentro del túnel industrial, la máquina de estados `FinalCinematicState` ejecuta una secuencia cinematográfica 3D continua sin vídeos ni imágenes estáticas:
+- **Etapa A — `FINAL_TRIGGERED` (`0.85 s`)**: Bloquea temporalmente movimiento/mirada/interacciones mediante `FirstPersonController.setControlsLocked(true)` (preservando el *Pointer Lock* del jugador para la transición al volver a correr), atenúa drásticamente la iluminación y sonidos ambientales del túnel y detona el golpe metálico de cierre (`playTunnelLockdownSlam` + `heavy_iron` `close_slam`).
+- **Etapa B — `CAMERA_TURN_BACK` (`0.95 s`)**: Interpola suavemente la orientación de cámara (`easeInOutCubic`) aproximadamente `180°` usando coordenadas reales jugador→criatura (`computeLookAnglesToTarget`, siempre mirando al monstruo sin teletransportar ni atravesar muros, manteniendo `PLAYER_EYE_HEIGHT`).
+- **Etapa C — `MONSTER_REVEAL` (`1.05 s`)**: Iluminación roja de emergencia enfocada encuadra a la criatura encorvada respirando con fuerza, elevando hombros/brazos y levantando lentamente la cabeza (`REVEAL` pose en `watcherModel.ts`) para fijar la mirada en el jugador.
+- **Etapa D — `MONSTER_ROAR` (`0.92 s`)**: La criatura emite un rugido original multicapa sin recorte (`playMonsterIntroRoar` con subgrave pectoral, formantes FM y eco de túnel), se activan la primera sirena y luz roja pulsante, e inicia una acometida no letal (`stepFinalIntroLunge`).
+- **Etapa E — `CAMERA_TURN_FORWARD` (`0.62 s`)**: Giro rápido suave de vuelta hacia la salida (`yaw = 0`, `pitch = -0.02`), sincroniza los ángulos internos con `controller.syncCameraAngles(...)`, muestra el aviso visual **`¡CORRE!`** y devuelve el control fluido en **`FINAL_CHASE`**.
+- **Regla de seguridad**: `FinalSequence.isCaptureAllowed()` permanece estrictamente en `false` durante las 5 etapas introductorias y en `FACTORY_REVEAL`, habilitándose únicamente en `FINAL_CHASE`.
+
+### 14.2 Director de persecución progresiva en 4 niveles (`finalSequence.ts`, `finalEnvironment.ts`, `finalAudio.ts`, `spatialAudio.ts`)
+- **Escalado por posición real (`getChaseIntensityLevel`)**:
+  - **Nivel 1 — Alerta Inicial (`Z > -60`)**: 1ª sirena, percusión mínima de pulso, iluminación roja en sector inicial (`Z >= -65`).
+  - **Nivel 2 — Emergencia (`-60 >= Z > -85`)**: Entra la 2ª sirena espacial, caja/clacks metálicos en la música, chispas y activación sectorial hasta `Z = -92`.
+  - **Nivel 3 — Pánico (`-85 >= Z > -108`)**: Ostinato rítmico urgente, estallidos de vapor y respiración agitada del jugador, luces activas hasta `Z = -118`.
+  - **Nivel 4 — Peligro Extremo (`Z <= -108..-134`)**: Todas las balizas del túnel encendidas, sirena secundaria con pulso klaxon, mayor cadencia agresiva del monstruo (`aggression = 1.38`) y mezcla al clímax sin reiniciar pistas.
+- **Presión por errores (`FinalSpeedContext`)**: Caminar lento, detenerse o mirar hacia atrás durante `FINAL_CHASE` suma presión de velocidad adicional al monstruo; un sprint limpio con `Shift` permite cruzar la puerta de la fábrica (`Z <= -134`) justo por delante de su alcance letal.
+- **Sensación física y llegada a la fábrica**: Oscilación de carrera, microvibración al paso cercano del monstruo y viñeta roja escalada (respetando `reducedCameraMotion` y `disableFlashes`). Al cruzar `Z = -134`, la captura se desactiva al instante, sirenas y música se cortan limpiamente y comienza la revelación silenciosa de la fábrica.
+
+### 14.3 Verificación automatizada y en navegador (Fase 7.3)
+- `phase7.test.ts` valida: máquina de estados completa y transiciones únicas, bloqueo de captura durante toda la intro, alineación exacta de cámara hacia el monstruo y retorno a `yaw = 0`, niveles 1–4 por coordenada `Z`, penalización de velocidad al caminar/mirar atrás, supervivencia a 30/60/120 FPS tras la cinemática de rugido, elevación real de cabeza en pose `REVEAL` y restauración limpia desde checkpoint (`REINTENTAR`).
+- Verificación manual recomendada:
+  1. Abrir la compuerta con 3 llaves y cruzar `Z = -37` para comprobar la pausa de advertencia, el giro automático 180°, el monstruo iluminado levantando la cabeza, el rugido sincronizado, el retorno rápido hacia adelante y el cartel `¡CORRE!`.
+  2. Completar la carrera manteniendo `Shift` hasta `Z = -134` observando el aumento progresivo de luces, vapor, sirenas y música en los 4 tramos del túnel y el corte limpio al entrar en la fábrica.
+  3. Repetir deteniéndose o mirando atrás durante `FINAL_CHASE` para verificar el screamer de captura y pulsar `REINTENTAR` comprobando el reinicio limpio en el checkpoint (`3/3` llaves, compuerta cerrada, sin duplicados).

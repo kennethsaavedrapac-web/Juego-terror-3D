@@ -8,6 +8,7 @@ export interface WatcherAnimateOptions {
   lookYawOffset?: number;
   lookPitchOffset?: number;
   attackProgress?: number; // 0..1
+  revealProgress?: number; // 0..1
   aggression?: number; // 0..1.4 violent sprint multiplier for final chase
   allowFrozenMicroBreath?: boolean;
   onFootstep?: (intensity: number, isRunning: boolean) => void;
@@ -238,6 +239,7 @@ export function createWatcherModel() {
   let walkBlend = 0;
   let runBlend = 0;
   let attackBlend = 0;
+  let revealBlend = 0;
   let crouchBlend = 0;
 
   const damp = THREE.MathUtils.damp;
@@ -250,6 +252,7 @@ export function createWatcherModel() {
     walkBlend = 0;
     runBlend = 0;
     attackBlend = 0;
+    revealBlend = 0;
     crouchBlend = 0;
     hips.position.set(0, HIPS_BASE_Y, 0.06);
     hips.rotation.set(0, 0, 0);
@@ -327,12 +330,14 @@ export function createWatcherModel() {
       options?.animState ?? (speed > 1.35 ? 'RUN' : speed > 0.08 ? 'WALK' : 'IDLE');
 
     const targetAttack = animState === 'ATTACK' ? 1 : 0;
+    const targetReveal = animState === 'REVEAL' ? 1 : 0;
     const targetRun = animState === 'RUN' ? 1 : 0;
     const targetWalk = animState === 'WALK' ? 1 : 0;
-    const targetIdle = Math.max(0, 1 - targetAttack - targetRun - targetWalk);
+    const targetIdle = Math.max(0, 1 - targetAttack - targetReveal - targetRun - targetWalk);
 
     walkBlend = damp(walkBlend, targetWalk, 9, safeDt);
     runBlend = damp(runBlend, targetRun, 10, safeDt);
+    revealBlend = damp(revealBlend, targetReveal, 12, safeDt);
     attackBlend =
       targetAttack === 1
         ? Math.max(0.42, damp(attackBlend, 1, 24, safeDt))
@@ -343,19 +348,24 @@ export function createWatcherModel() {
     const isRunning = runBlend > 0.45;
     const agg = isRunning ? THREE.MathUtils.clamp(options?.aggression ?? 0, 0, 1.4) : 0;
 
-    // Organic breath frequency scaling: rapid frantic panting during violent pursuit
+    // Organic breath frequency scaling: deep ragged panting in REVEAL & rapid furious breathing in RUN
     const breathSpeed =
-      1.6 * targetIdle + 2.5 * walkBlend + (4.6 + agg * 1.9) * runBlend + 5.2 * attackBlend;
+      1.6 * targetIdle +
+      2.5 * walkBlend +
+      3.9 * revealBlend +
+      (4.6 + agg * 1.9) * runBlend +
+      5.2 * attackBlend;
     breathTime += safeDt * breathSpeed;
     idleTwitchTime += safeDt;
 
-    // Step cadence synchronized to movement speed + violent sprint boost
+    // Step cadence synchronized to ground speed (~1.75m per running stride, zero foot skating)
     const strideFreq =
       speed > 0.05
-        ? (isRunning ? 5.8 * (1 + agg * 0.22) : 3.4) *
-          Math.max(0.65, Math.min(1.65, speed / (isRunning ? 1.85 : 1.0)))
+        ? isRunning
+          ? Math.max(5.2, (speed / 1.35) * Math.PI * (1 + agg * 0.08))
+          : 3.4 * Math.max(0.65, Math.min(1.65, speed / 1.0))
         : 0;
-    if (strideFreq > 0 && attackBlend < 0.5) {
+    if (strideFreq > 0 && attackBlend < 0.5 && revealBlend < 0.5) {
       const nextPhase = gaitPhase + safeDt * strideFreq;
       if (Math.floor(nextPhase / Math.PI) > Math.floor(gaitPhase / Math.PI)) {
         if (moveBlend > 0.25) {
@@ -368,40 +378,56 @@ export function createWatcherModel() {
 
     const breath = Math.sin(breathTime);
     const twitchPulse = Math.pow(Math.max(0, Math.sin(idleTwitchTime * 0.75 + Math.sin(idleTwitchTime * 1.9))), 6);
-    const idleWeight = Math.max(0, 1 - moveBlend - attackBlend);
+    const idleWeight = Math.max(0, 1 - moveBlend - attackBlend - revealBlend);
 
     const atkP = THREE.MathUtils.clamp(options?.attackProgress ?? 0, 0, 1);
     const atkEase = 1 - Math.pow(1 - atkP, 2.2);
     const atkGrab = atkP > 0.42 ? Math.sin(((atkP - 0.42) / 0.58) * Math.PI * 0.5) : 0;
 
+    const revP = THREE.MathUtils.clamp(options?.revealProgress ?? 0, 0, 1);
+    const revEase = revP * revP * (3 - 2 * revP);
+
     // 1. Torso & Organic Breathing & Hunch
-    const chestScaleX = 1 + breath * (0.024 * idleWeight + 0.045 * runBlend + 0.022 * walkBlend) + 0.04 * attackBlend;
-    const chestScaleZ = 1 + breath * (0.035 * idleWeight + 0.065 * runBlend + 0.030 * walkBlend) + 0.05 * attackBlend;
-    const chestScaleY = 1 + breath * (0.012 * idleWeight + 0.025 * runBlend);
+    const chestScaleX =
+      1 +
+      breath * (0.024 * idleWeight + 0.055 * revealBlend + 0.045 * runBlend + 0.022 * walkBlend) +
+      0.04 * attackBlend;
+    const chestScaleZ =
+      1 +
+      breath * (0.035 * idleWeight + 0.08 * revealBlend + 0.065 * runBlend + 0.03 * walkBlend) +
+      0.05 * attackBlend;
+    const chestScaleY = 1 + breath * (0.012 * idleWeight + 0.03 * revealBlend + 0.025 * runBlend);
     torso.scale.set(chestScaleX, chestScaleY, chestScaleZ);
 
     // Subtle shoulder rise and tense predatory hunch
     const shoulderHeave =
-      breath * (0.012 * idleWeight + (0.024 + agg * 0.014) * runBlend + 0.015 * walkBlend) +
-      agg * 0.032 * runBlend;
+      breath *
+        (0.012 * idleWeight +
+          0.034 * revealBlend +
+          (0.024 + agg * 0.014) * runBlend +
+          0.015 * walkBlend) +
+      (0.038 * revealBlend + agg * 0.032 * runBlend);
     shoulders[0].position.y = 0.74 + shoulderHeave;
     shoulders[1].position.y = 0.74 + shoulderHeave;
 
     const targetTorsoPitch =
       (-0.12 - breath * 0.025) * targetIdle +
+      (-0.34 + revEase * 0.08 - breath * 0.045) * revealBlend +
       (-0.28 - Math.sin(gaitPhase * 2) * 0.03) * walkBlend +
-      (-0.52 - agg * 0.18 - Math.sin(gaitPhase * 2) * (0.05 + agg * 0.03)) * runBlend +
+      (-0.54 - agg * 0.18 - Math.sin(gaitPhase * 2) * (0.05 + agg * 0.03)) * runBlend +
       (-0.42 - atkEase * 0.38) * attackBlend -
       crouchBlend * 0.22;
 
     const targetTorsoYaw =
       Math.sin(breathTime * 0.45) * 0.04 * targetIdle +
+      Math.sin(breathTime * 0.55) * 0.07 * revealBlend +
       Math.sin(gaitPhase) * 0.11 * walkBlend +
       Math.sin(gaitPhase) * (0.18 + agg * 0.08) * runBlend +
       Math.sin(atkP * Math.PI * 4) * 0.06 * attackBlend;
 
     const targetTorsoRoll =
       Math.sin(breathTime * 0.32) * 0.035 * targetIdle +
+      Math.cos(breathTime * 0.42) * 0.05 * revealBlend +
       Math.cos(gaitPhase) * 0.06 * walkBlend +
       Math.cos(gaitPhase) * (0.09 + agg * 0.05) * runBlend +
       Math.cos(atkP * Math.PI * 3) * 0.05 * attackBlend;
@@ -410,23 +436,27 @@ export function createWatcherModel() {
     torso.rotation.y = damp(torso.rotation.y, targetTorsoYaw, 14, safeDt);
     torso.rotation.z = damp(torso.rotation.z, targetTorsoRoll, 14, safeDt);
 
-    // 2. Neck & Head (unnatural predatory jerks + intense gaze lock)
-    const lookYaw = THREE.MathUtils.clamp(options?.lookYawOffset ?? 0, -0.60, 0.60);
+    // 2. Neck & Head (slow menacing head lift in REVEAL + unnatural predatory jerks in RUN)
+    const lookYaw = THREE.MathUtils.clamp(options?.lookYawOffset ?? 0, -0.6, 0.6);
     const lookPitch = THREE.MathUtils.clamp(options?.lookPitchOffset ?? 0, -0.35, 0.35);
     const runSpasm = agg * Math.sin(idleTwitchTime * 9.5 + Math.sin(idleTwitchTime * 4.1));
+    const revealHeadLift = -0.22 + revEase * 0.46;
 
     const targetNeckPitch =
       (0.08 + breath * 0.02) * targetIdle +
+      (revealHeadLift * 0.7 + breath * 0.03) * revealBlend +
       0.18 * walkBlend +
-      (0.34 + agg * 0.14) * runBlend +
-      (0.30 + atkEase * 0.18) * attackBlend +
+      (0.36 + agg * 0.14) * runBlend +
+      (0.3 + atkEase * 0.18) * attackBlend +
       crouchBlend * 0.15;
     const targetNeckYaw =
       Math.sin(breathTime * 0.6) * 0.08 * targetIdle +
-      lookYaw * 0.35 +
+      lookYaw * 0.4 * revealBlend +
+      lookYaw * 0.35 * moveBlend +
       runSpasm * 0.09 * runBlend;
     const targetNeckRoll =
-      (0.12 + twitchPulse * 0.16) * targetIdle -
+      (0.12 + twitchPulse * 0.16) * targetIdle +
+      (0.16 - revEase * 0.08 + Math.sin(idleTwitchTime * 3.1) * 0.04) * revealBlend -
       Math.sin(gaitPhase) * 0.04 * moveBlend +
       runSpasm * 0.12 * runBlend +
       Math.sin(atkP * 28) * 0.05 * attackBlend;
@@ -436,15 +466,18 @@ export function createWatcherModel() {
     neck.rotation.z = damp(neck.rotation.z, targetNeckRoll, 14, safeDt);
 
     const targetHeadPitch =
-      (0.05 + lookPitch * 0.65) * (1 - attackBlend) +
+      (0.05 + lookPitch * 0.65) * (1 - attackBlend - revealBlend) +
+      (-0.18 + revEase * 0.34) * revealBlend +
       (0.18 + Math.sin(atkP * Math.PI) * 0.2) * attackBlend;
     const targetHeadYaw =
       (Math.sin(breathTime * 0.42) * 0.12 + twitchPulse * 0.18) * targetIdle +
-      lookYaw * 0.70 * (runBlend + walkBlend * 0.6 + attackBlend) +
+      (lookYaw * 0.6 + Math.sin(idleTwitchTime * 2.8) * 0.05) * revealBlend +
+      lookYaw * 0.7 * (runBlend + walkBlend * 0.6 + attackBlend) +
       runSpasm * 0.11 * runBlend +
       Math.sin(atkP * 36) * 0.07 * attackBlend;
     const targetHeadRoll =
       (0.22 + Math.sin(breathTime * 0.7) * 0.05 + twitchPulse * 0.22) * targetIdle +
+      (0.2 - revEase * 0.14 + twitchPulse * 0.08) * revealBlend +
       (0.14 + Math.cos(gaitPhase) * 0.05) * walkBlend +
       (0.09 + Math.cos(gaitPhase) * (0.07 + agg * 0.06) + runSpasm * 0.14) * runBlend -
       (0.18 + Math.sin(atkP * 14) * 0.09) * attackBlend;
@@ -469,28 +502,31 @@ export function createWatcherModel() {
 
       const hipPitch =
         0.04 * targetIdle +
+        (i === 0 ? 0.18 : -0.06) * revealBlend +
         stride * 0.36 * asym * walkBlend +
-        (stride * (0.62 + agg * 0.18) * asym + 0.16 + agg * 0.04) * runBlend +
+        (stride * (0.64 + agg * 0.18) * asym + 0.18 + agg * 0.04) * runBlend +
         (i === 0 ? 0.24 : -0.18) * attackBlend +
         crouchBlend * 0.32;
 
-      // Knee flexes backward (negative X) during swing and crouched run
+      // Knee flexes backward (negative X) during swing, crouched coil in REVEAL, and sprint
       const kneePitch =
-        -0.1 * targetIdle +
-        (-0.20 - lift * 0.52) * walkBlend +
-        (-0.30 - lift * (0.84 + agg * 0.16)) * runBlend -
+        -0.1 * targetIdle -
+        0.34 * revealBlend +
+        (-0.2 - lift * 0.52) * walkBlend +
+        (-0.34 - lift * (0.88 + agg * 0.16)) * runBlend -
         0.22 * attackBlend -
         crouchBlend * 0.64;
 
       // Foot compensates so sole stays near level with floor during stance
       const footPitch =
         0.06 * targetIdle +
+        0.14 * revealBlend +
         (-hipPitch * 0.35 + lift * 0.25) * moveBlend;
 
       hipsLegs[i].rotation.x = damp(hipsLegs[i].rotation.x, hipPitch, 14, safeDt);
       hipsLegs[i].rotation.z = damp(
         hipsLegs[i].rotation.z,
-        (i === 0 ? -0.025 : 0.025) * (1 + runBlend * 0.6),
+        (i === 0 ? -0.025 : 0.025) * (1 + runBlend * 0.6 + revealBlend * 0.5),
         12,
         safeDt,
       );
@@ -505,7 +541,7 @@ export function createWatcherModel() {
       if (drop > lowestFootDrop) lowestFootDrop = drop;
     }
 
-    // Hips sway & height compensation for knee flexion / crouch
+    // Hips sway & height compensation for knee flexion / crouch / coiled reveal
     const hipSwayYaw =
       -Math.sin(gaitPhase) * 0.08 * walkBlend - Math.sin(gaitPhase) * 0.16 * runBlend;
     const hipSwayRoll =
@@ -517,7 +553,12 @@ export function createWatcherModel() {
     hips.rotation.z = damp(hips.rotation.z, hipSwayRoll, 12, safeDt);
     hips.position.y = damp(
       hips.position.y,
-      HIPS_BASE_Y - lowestFootDrop * 0.85 + strideBounce - crouchBlend * 0.16 - atkEase * 0.08 * attackBlend,
+      HIPS_BASE_Y -
+        lowestFootDrop * 0.85 +
+        strideBounce -
+        crouchBlend * 0.16 -
+        revEase * 0.05 * revealBlend -
+        atkEase * 0.08 * attackBlend,
       14,
       safeDt,
     );
@@ -532,37 +573,43 @@ export function createWatcherModel() {
 
       const shoulderRoll =
         side * (0.04 + breath * 0.015) * targetIdle +
+        side * (0.14 + breath * 0.04 + revEase * 0.06) * revealBlend +
         side * (0.06 + Math.cos(gaitPhase + phaseOffset) * 0.05) * walkBlend +
         side * (0.16 + agg * 0.09 + Math.cos(gaitPhase + phaseOffset) * (0.09 + agg * 0.06)) * runBlend +
         side * (0.28 - atkGrab * 0.12) * attackBlend;
 
       const upperArmPitch =
         (0.08 + Math.sin(breathTime * 1.1 + i * 1.7) * 0.035) * targetIdle +
+        (0.32 + revEase * 0.28 + Math.sin(breathTime * 1.6 + i) * 0.06) * revealBlend +
         (0.14 - swing * 0.28 * asymArm) * walkBlend +
         (0.52 + agg * 0.24 - swing * (0.62 + agg * 0.26) * asymArm) * runBlend +
-        (2.10 + atkEase * 0.25) * attackBlend;
+        (2.1 + atkEase * 0.25) * attackBlend;
 
       const upperArmRoll =
         side * 0.05 * targetIdle +
+        side * (0.18 + revEase * 0.08) * revealBlend +
         side * 0.08 * walkBlend +
         side * (0.16 + agg * 0.07) * runBlend -
         side * (0.34 - atkGrab * 0.32) * attackBlend;
 
-      // Forearms extend aggressively toward camera, then hook inward as claws close
+      // Forearms coil ready in REVEAL and slash forward violently in RUN
       const elbowPitch =
         (0.18 + Math.sin(breathTime * 1.3 + i) * 0.04) * targetIdle +
+        (0.62 + revEase * 0.22 + breath * 0.06) * revealBlend +
         (0.35 + Math.max(0, -swing) * 0.24) * walkBlend +
         (0.72 + Math.max(0, -swing) * (0.44 + agg * 0.2)) * runBlend +
         (0.38 - atkEase * 0.24 + atkGrab * 0.32) * attackBlend;
 
       const handPitch =
         (0.12 + twitchPulse * 0.18) * targetIdle +
+        (0.24 + revEase * 0.16) * revealBlend +
         0.16 * walkBlend +
         (0.26 + agg * 0.12) * runBlend +
         (-0.34 + atkGrab * 0.48) * attackBlend;
 
       const handRoll =
         side * 0.08 * targetIdle +
+        side * 0.18 * revealBlend +
         side * (0.16 + agg * 0.08) * runBlend +
         side * (0.32 - atkGrab * 0.28) * attackBlend;
 
@@ -577,10 +624,11 @@ export function createWatcherModel() {
       for (let f = 0; f < 4; f++) {
         const fingerWave = Math.sin(breathTime * (1.8 + f * 0.45) + i * 2.1 + f);
         const targetFingerCurl =
-          (0.20 + fingerWave * 0.14) * targetIdle +
+          (0.2 + fingerWave * 0.14) * targetIdle +
+          (0.45 + revEase * 0.42 + fingerWave * 0.08) * revealBlend +
           (0.28 + fingerWave * 0.08) * walkBlend +
           (0.54 + agg * 0.34 + fingerWave * 0.06 * agg) * runBlend +
-          (-0.20 + atkGrab * 1.10) * attackBlend;
+          (-0.2 + atkGrab * 1.1) * attackBlend;
         fingers[i][f].rotation.x = damp(fingers[i][f].rotation.x, targetFingerCurl, 18, safeDt);
       }
     }

@@ -1,8 +1,14 @@
 import {
   FinalSequence,
   FACTORY_Z,
+  FINAL_INTRO_DURATIONS,
   FINAL_TRIGGER_Z,
+  type FinalCinematicState,
   computeFinalChaseSpeed,
+  computeLookAnglesToTarget,
+  easeInOutCubic,
+  isIntroCinematicState,
+  shortestAngleDelta,
   smooth,
   getFinalChaseMetrics,
 } from './finalSequence';
@@ -26,7 +32,7 @@ import { InteractionSystem } from './interactions';
 import { InventoryManager } from './inventory';
 import { JumpscareSystem } from './jumpscares';
 import { buildAbandonedBuilding } from './level';
-import { PLAYER_RADIUS, clampDelta, resolveCircleAABB } from './physics';
+import { PLAYER_RADIUS, SPRINT_SPEED, clampDelta, resolveCircleAABB } from './physics';
 import { FirstPersonController } from './player';
 import { SpatialAudioEngine } from './spatialAudio';
 import { SupernaturalEventsSystem } from './supernatural';
@@ -141,6 +147,16 @@ export class HorrorGameEngine {
   private lastNotificationId = 0;
   private lastPromptText = '';
   private lastPromptVisible = false;
+  private introTurnBackStartYaw = 0;
+  private introTurnBackStartPitch = 0;
+  private introTurnForwardStartYaw = 0;
+  private introTurnForwardStartPitch = 0;
+  private introRoarPlayed = false;
+  private chaseBannerText: string | null = null;
+  private chaseBannerTimer = 0;
+  private lastChaseBanner: string | null = null;
+  private lastFinalCinematicActive = false;
+  private readonly introEuler = new THREE.Euler(0, 0, 0, 'YXZ');
   private staminaBarEl: HTMLElement | null = null;
   private vignetteEl: HTMLElement | null = null;
   private interferenceEl: HTMLElement | null = null;
@@ -210,6 +226,10 @@ export class HorrorGameEngine {
       const checkpoint = nextStatus === 'playing' && this.final.checkpoint && (prevStatus === 'gameover' || prevStatus === 'paused');
       this.final.reset(checkpoint);
       this.finalChaseElapsed = 0;
+      this.introRoarPlayed = false;
+      this.chaseBannerText = null;
+      this.chaseBannerTimer = 0;
+      document.body.dataset.finalState = 'INACTIVE';
       this.qaAutoRun=false;
       if(this.buildingGroup)this.buildingGroup.visible=true;
       this.finalAudio.stop();
@@ -248,6 +268,9 @@ export class HorrorGameEngine {
 
     if (nextStatus === 'ending') {
       stopHeavyIronOpeningLoop();
+      this.chaseBannerText = null;
+      this.chaseBannerTimer = 0;
+      this.controller.setControlsLocked(false);
       this.controller.setActive(false);
       return;
     }
@@ -767,6 +790,8 @@ export class HorrorGameEngine {
     const notifId = this.activeNotification?.id ?? 0;
     const activePrompt = prompt ?? EMPTY_PROMPT;
 
+    const finalCinematicActive = isIntroCinematicState(this.final.cinematicState);
+
     const changedDiscrete =
       zone !== this.lastZone ||
       exhausted !== this.lastExhausted ||
@@ -776,7 +801,9 @@ export class HorrorGameEngine {
       inv.exitUnlocked !== this.lastExitUnlocked ||
       notifId !== this.lastNotificationId ||
       activePrompt.visible !== this.lastPromptVisible ||
-      activePrompt.text !== this.lastPromptText;
+      activePrompt.text !== this.lastPromptText ||
+      this.chaseBannerText !== this.lastChaseBanner ||
+      finalCinematicActive !== this.lastFinalCinematicActive;
 
     if (!force && !changedDiscrete && now - this.lastHudBroadcast < 120) {
       return;
@@ -792,6 +819,8 @@ export class HorrorGameEngine {
     this.lastNotificationId = notifId;
     this.lastPromptVisible = activePrompt.visible;
     this.lastPromptText = activePrompt.text;
+    this.lastChaseBanner = this.chaseBannerText;
+    this.lastFinalCinematicActive = finalCinematicActive;
 
     this.callbacks.onHudUpdate({
       stamina: Math.round(this.controller.stamina.value),
@@ -806,6 +835,8 @@ export class HorrorGameEngine {
       exitUnlocked: inv.exitUnlocked,
       prompt: activePrompt,
       notification: this.activeNotification,
+      chaseBanner: this.chaseBannerText,
+      finalCinematicActive,
     });
   }
 
@@ -1151,6 +1182,7 @@ export class HorrorGameEngine {
   private updateFinal(dt: number) {
     if (this.final.stage === 'END_COMPLETE') return;
     const previousStage = this.final.stage;
+    const prevCinematicState: FinalCinematicState = this.final.cinematicState;
     if (import.meta.env.DEV && this.qaAutoRun && this.status === 'playing') {
       this.controller.setQAForward(true);
     }
@@ -1167,25 +1199,61 @@ export class HorrorGameEngine {
       this.prevPlayerPos.copy(this.controller.position);
       // Adrenaline is exclusive to the finale; normal stamina is unchanged.
       this.controller.stamina = { value: 100, exhausted: false };
+      const shakeLevel = this.final.chasing
+        ? 0.24 + preMetrics.level * 0.12 + preMetrics.threatProximity * 0.36
+        : 0.14;
       this.controller.update(dt, this.camera, this.colliders, {
         reducedMotion: this.settings.reducedCameraMotion,
         trauma: this.cameraTrauma,
-        chaseIntensity: this.final.chasing ? 0.35 + preMetrics.threatProximity * 0.65 : 0.14,
+        chaseIntensity: shakeLevel,
         elapsed: this.elapsed,
       });
       this.doorSystem.update(dt, [this.controller.position], this.settings.reducedCameraMotion);
-      if (this.controller.consumeFlashlightPressed()) this.flashlight.toggle();
-      this.controller.consumeInteractPressed();
+      if (!this.final.isControlLocked()) {
+        if (this.controller.consumeFlashlightPressed()) this.flashlight.toggle();
+        this.controller.consumeInteractPressed();
+      }
       this.flashlight.update(dt);
     }
-    if (this.buildingGroup) this.buildingGroup.visible = this.controller.position.z > -25;
+    if (this.buildingGroup) this.buildingGroup.visible = this.controller.position.z > -62;
     this.elapsed += dt;
+
+    // Trigger 5-stage integrated 3D intro cinematic when advancing past FINAL_TRIGGER_Z
+    if (
+      this.final.stage === 'FINAL_ESCAPE' &&
+      this.final.cinematicState === 'FINAL_ESCAPE_APPROACH' &&
+      this.controller.position.z <= FINAL_TRIGGER_Z
+    ) {
+      if (this.final.triggerIntroCinematic()) {
+        this.controller.setControlsLocked(true);
+        const spawnZ = Math.min(-23.0, this.controller.position.z + 14.4);
+        this.watcher.active = true;
+        this.watcher.model.root.visible = true;
+        this.watcher.position.set(0, 0, spawnZ);
+        this.watcher.model.root.rotation.y = Math.atan2(
+          -(this.controller.position.x - 0),
+          -(this.controller.position.z - spawnZ),
+        );
+        this.introRoarPlayed = false;
+        this.introTurnBackStartYaw = this.controller.yaw;
+        this.introTurnBackStartPitch = this.controller.pitch;
+        stopHeavyIronOpeningLoop();
+        playDoorSound('heavy_iron', 'close_slam');
+        this.finalAudio.playTunnelLockdownSlam();
+        this.cameraTrauma = Math.max(this.cameraTrauma, 0.36);
+      }
+    }
+
     this.final.update(dt, this.controller.position.z);
+    document.body.dataset.finalState = this.final.cinematicState;
 
     if (previousStage !== this.final.stage) {
       this.finalAudio.setStage(this.final.stage);
       if (this.final.stage === 'FINAL_FACTORY_REVEAL') {
         this.revealStart.copy(this.camera.quaternion);
+        this.chaseBannerText = null;
+        this.chaseBannerTimer = 0;
+        this.controller.setControlsLocked(false);
         this.controller.setActive(false);
         this.interactions.clearActive();
         this.status = 'ending';
@@ -1212,30 +1280,107 @@ export class HorrorGameEngine {
       this.callbacks.onFinalStage?.(this.final.stage);
     }
 
+    // Handle single-fire transitions between the 5 intro cinematic stages and FINAL_CHASE
+    const cinState = this.final.cinematicState;
+    if (prevCinematicState !== cinState) {
+      if (cinState === 'CAMERA_TURN_BACK') {
+        this.introTurnBackStartYaw = this.controller.yaw;
+        this.introTurnBackStartPitch = this.controller.pitch;
+      } else if (cinState === 'MONSTER_ROAR' && !this.introRoarPlayed) {
+        this.introRoarPlayed = true;
+        this.spatialAudio.playMonsterIntroRoar(
+          this.watcher.position,
+          this.controller.position,
+          this.colliders,
+        );
+        this.cameraTrauma = Math.max(this.cameraTrauma, 0.34);
+        this.growlTimer = 2.6;
+        this.exhaleTimer = 1.2;
+      } else if (cinState === 'CAMERA_TURN_FORWARD') {
+        const backLook = computeLookAnglesToTarget(this.camera.position, {
+          x: this.watcher.position.x,
+          y: this.watcher.position.y + 2.18,
+          z: this.watcher.position.z,
+        });
+        this.introTurnForwardStartYaw = backLook.yaw;
+        this.introTurnForwardStartPitch = backLook.pitch;
+        this.chaseBannerText = '¡CORRE!';
+        this.chaseBannerTimer = 2.1;
+      } else if (cinState === 'FINAL_CHASE') {
+        this.finalChaseElapsed = 0;
+        this.controller.syncCameraAngles(0, -0.02);
+        this.controller.setControlsLocked(false);
+        this.prevPlayerPos.copy(this.controller.position);
+        this.chaseBannerText = '¡CORRE!';
+        this.chaseBannerTimer = Math.max(this.chaseBannerTimer, 1.5);
+        this.pushNotification(
+          'Mirarlo ya no lo detiene · Mantén SHIFT para correr.',
+          'alert',
+          4.2,
+        );
+      }
+    }
+
     const stage = this.final.stage;
     if (stage === 'FINAL_ESCAPE') {
-      if (!this.final.chasing && this.controller.position.z < FINAL_TRIGGER_Z) {
-        // Spawn only outside the actual view, with a clear 14 m head start.
-        const spawn = new THREE.Vector3(0, 0, -23);
-        this.camera.updateMatrixWorld();
-        if (!this.watcher.vision.visible(this.camera, spawn, true)) {
-          this.final.chasing = true;
-          this.finalChaseElapsed = 0;
-          this.watcher.active = true;
-          this.watcher.model.root.visible = true;
-          this.watcher.position.copy(spawn);
-          stopHeavyIronOpeningLoop();
-          playDoorSound('heavy_iron', 'close_slam');
-          this.finalAudio.playTunnelLockdownSlam();
-          this.cameraTrauma = Math.max(this.cameraTrauma, 0.45);
-          this.spatialAudio.playMonsterGrowl(spawn, this.controller.position, this.colliders, true);
-          this.growlTimer = 2.6;
-          this.exhaleTimer = 1.2;
-          this.pushNotification(
-            '¡CORRE! Está furioso. Mirarlo ya no lo detiene. Mantén SHIFT.',
-            'alert',
-            5,
-          );
+      // Execute active intro cinematic camera & monster beats
+      if (isIntroCinematicState(cinState)) {
+        this.camera.position.copy(this.controller.position);
+        const motionScale = this.settings.reducedCameraMotion ? 0.25 : 1.0;
+        const lookAtMonster = computeLookAnglesToTarget(this.camera.position, {
+          x: this.watcher.position.x,
+          y: this.watcher.position.y + (cinState === 'CAMERA_TURN_BACK' ? 1.95 : 2.18),
+          z: this.watcher.position.z,
+        });
+
+        let camYaw = this.introTurnBackStartYaw;
+        let camPitch = this.introTurnBackStartPitch;
+        let camRoll = 0;
+        let targetFov = 70;
+
+        if (cinState === 'FINAL_TRIGGERED') {
+          const tremor = this.cameraTrauma * this.cameraTrauma * motionScale;
+          camPitch += Math.sin(this.elapsed * 24) * 0.024 * tremor;
+          camRoll += Math.cos(this.elapsed * 29) * 0.028 * tremor;
+          this.watcher.animateReveal(dt, 0, this.controller.position);
+        } else if (cinState === 'CAMERA_TURN_BACK') {
+          const p = easeInOutCubic(this.final.cinematicTime / FINAL_INTRO_DURATIONS.turnBack);
+          let deltaYaw = shortestAngleDelta(this.introTurnBackStartYaw, lookAtMonster.yaw);
+          if (Math.abs(Math.abs(deltaYaw) - Math.PI) < 0.02) deltaYaw = Math.PI;
+          const deltaPitch = lookAtMonster.pitch - this.introTurnBackStartPitch;
+          camYaw = this.introTurnBackStartYaw + deltaYaw * p;
+          camPitch = this.introTurnBackStartPitch + deltaPitch * p;
+          targetFov = 70 - p * 4;
+          this.watcher.animateReveal(dt, 0, this.controller.position);
+        } else if (cinState === 'MONSTER_REVEAL') {
+          const p = Math.min(1, this.final.cinematicTime / FINAL_INTRO_DURATIONS.reveal);
+          camYaw = lookAtMonster.yaw;
+          camPitch = lookAtMonster.pitch;
+          targetFov = 65;
+          this.watcher.animateReveal(dt, p, this.controller.position);
+        } else if (cinState === 'MONSTER_ROAR') {
+          const tremor = (0.28 + this.cameraTrauma * 0.6) * motionScale;
+          camYaw = lookAtMonster.yaw + Math.sin(this.elapsed * 32) * 0.012 * tremor;
+          camPitch = lookAtMonster.pitch + Math.cos(this.elapsed * 36) * 0.014 * tremor;
+          camRoll = Math.sin(this.elapsed * 29) * 0.018 * tremor;
+          targetFov = 63.5;
+          this.watcher.stepFinalIntroLunge(dt, this.controller.position, 0.9, 1.2);
+        } else if (cinState === 'CAMERA_TURN_FORWARD') {
+          const p = easeInOutCubic(this.final.cinematicTime / FINAL_INTRO_DURATIONS.turnForward);
+          let deltaYaw = shortestAngleDelta(this.introTurnForwardStartYaw, 0);
+          if (Math.abs(Math.abs(deltaYaw) - Math.PI) < 0.02) deltaYaw = -Math.PI;
+          const deltaPitch = -0.02 - this.introTurnForwardStartPitch;
+          camYaw = this.introTurnForwardStartYaw + deltaYaw * p;
+          camPitch = this.introTurnForwardStartPitch + deltaPitch * p;
+          targetFov = 63.5 + p * 6.5;
+          this.watcher.stepFinalIntroLunge(dt, this.controller.position, 1.25, 1.25);
+        }
+
+        this.introEuler.set(camPitch, camYaw, camRoll, 'YXZ');
+        this.camera.quaternion.setFromEuler(this.introEuler);
+        if (Math.abs(this.camera.fov - targetFov) > 0.05) {
+          this.camera.fov = THREE.MathUtils.damp(this.camera.fov, targetFov, 10, dt);
+          this.camera.updateProjectionMatrix();
         }
       }
 
@@ -1247,28 +1392,40 @@ export class HorrorGameEngine {
           true,
           stage,
         );
+        const actualPlayerSpeed =
+          this.finalChaseElapsed > dt * 2 && dt > 1e-4
+            ? Math.hypot(
+                this.controller.position.x - this.prevPlayerPos.x,
+                this.controller.position.z - this.prevPlayerPos.z,
+              ) / dt
+            : SPRINT_SPEED;
+        const lookingBack = Math.cos(this.controller.yaw) < 0.25;
         const chaseSpeed = computeFinalChaseSpeed(
           curMetrics.phase,
           curMetrics.monsterDistance,
           this.finalChaseElapsed,
+          { playerSpeed: actualPlayerSpeed, lookingBack },
         );
         const aggression =
-          curMetrics.phase === 'FINAL_METERS'
-            ? 1.32
-            : curMetrics.phase === 'DESPERATE_CHASE'
-              ? 1.14
-              : 1.0;
+          curMetrics.level === 4
+            ? 1.38
+            : curMetrics.level === 3
+              ? 1.24
+              : curMetrics.level === 2
+                ? 1.12
+                : 1.0;
         this.watcher.updateFinal(
           dt,
           this.controller.position,
           this.prevPlayerPos,
           chaseSpeed,
           aggression,
+          this.final.isCaptureAllowed(),
         );
         this.growlTimer -= dt;
         if (this.growlTimer <= 0) {
           this.growlTimer =
-            curMetrics.phase === 'FINAL_METERS' || curMetrics.threatProximity > 0.65 ? 2.1 : 3.2;
+            curMetrics.level >= 3 || curMetrics.threatProximity > 0.65 ? 2.0 : 3.2;
           this.spatialAudio.playMonsterGrowl(
             this.watcher.position,
             this.controller.position,
@@ -1278,7 +1435,7 @@ export class HorrorGameEngine {
         }
         this.exhaleTimer -= dt;
         if (this.exhaleTimer <= 0) {
-          this.exhaleTimer = 1.15 + Math.random() * 0.55;
+          this.exhaleTimer = 1.05 + Math.random() * 0.55;
           this.spatialAudio.playMonsterExhale(
             this.watcher.position,
             this.controller.position,
@@ -1293,27 +1450,40 @@ export class HorrorGameEngine {
         this.final.chasing,
         stage,
       );
+      const isWarningDim = cinState === 'FINAL_TRIGGERED' || cinState === 'CAMERA_TURN_BACK';
       this.spatialAudio.update({
         dt,
         elapsed: this.elapsed,
         active: true,
         camera: this.camera,
-        watcherActive: this.final.chasing,
+        watcherActive: this.final.chasing || cinState === 'MONSTER_REVEAL' || cinState === 'MONSTER_ROAR' || cinState === 'CAMERA_TURN_FORWARD',
         watcherPos: this.watcher.position,
         watcherState: this.watcher.state,
         tensionLevel: this.final.chasing ? 4 : 3,
-        tensionIntensity: this.final.chasing ? Math.max(0.5, liveMetrics.threatProximity) : 0.25,
+        tensionIntensity: this.final.chasing
+          ? Math.max(0.45, liveMetrics.threatProximity, liveMetrics.level * 0.22)
+          : 0.25,
         exhausted: false,
         colliders: this.colliders,
         finalChaseMode: true,
         chaseProximity: liveMetrics.threatProximity,
+        finalChaseLevel: liveMetrics.level,
+        cinematicDimmed: isWarningDim,
       });
 
-      const targetFog = this.final.chasing ? 0.041 + liveMetrics.threatProximity * 0.008 : 0.036;
+      const targetFog = isWarningDim
+        ? 0.044
+        : this.final.chasing
+          ? 0.039 + liveMetrics.level * 0.002 + liveMetrics.threatProximity * 0.006
+          : 0.036;
       this.fog.density = THREE.MathUtils.damp(this.fog.density, targetFog, 2.2, dt);
       this.fog.color.lerp(this.finalFogColor, 1 - Math.exp(-dt * 2.2));
       this.updateVignetteDom(
-        this.final.chasing ? 0.45 + liveMetrics.threatProximity * 0.52 : 0.35,
+        isWarningDim
+          ? 0.62
+          : this.final.chasing
+            ? 0.4 + liveMetrics.level * 0.08 + liveMetrics.threatProximity * 0.42
+            : 0.32,
         false,
       );
     }
@@ -1346,12 +1516,27 @@ export class HorrorGameEngine {
       this.settings.disableFlashes,
       stage === 'FINAL_ESCAPE',
       finalMetrics.phase,
+      {
+        chaseLevel: finalMetrics.level,
+        cinematicState: this.final.cinematicState,
+        monsterZ: this.watcher.position.z,
+      },
     );
-    this.finalAudio.update(dt, finalMetrics.phase, finalMetrics.threatProximity);
+    this.finalAudio.update(
+      dt,
+      finalMetrics.phase,
+      finalMetrics.threatProximity,
+      finalMetrics.level,
+      this.final.cinematicState,
+    );
 
     if (playable) {
       this.notificationTimer = Math.max(0, this.notificationTimer - dt);
       if (!this.notificationTimer) this.activeNotification = null;
+      if (this.chaseBannerTimer > 0) {
+        this.chaseBannerTimer = Math.max(0, this.chaseBannerTimer - dt);
+        if (this.chaseBannerTimer === 0) this.chaseBannerText = null;
+      }
       this.updateStaminaDom(100, false);
       this.broadcastHud(false, 'Túnel de evacuación', EMPTY_PROMPT);
     }
