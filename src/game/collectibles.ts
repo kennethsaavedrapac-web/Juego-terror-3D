@@ -244,8 +244,8 @@ export function createCollectiblesSystem(
       enabled: () => !runtime.collected,
       getPrompt: () => ({
         visible: true,
-        keyLabel: 'E',
-        text: `Presiona E para recoger ${k.name}`,
+        keyLabel: 'CLIC IZQUIERDO',
+        text: `Recoger llave (${k.name})`,
       }),
       onInteract: () => {
         if (runtime.collected) return;
@@ -287,8 +287,8 @@ export function createCollectiblesSystem(
       enabled: () => true,
       getPrompt: () => ({
         visible: true,
-        keyLabel: 'E',
-        text: `Presiona E para leer ${n.title}`,
+        keyLabel: 'CLIC IZQUIERDO',
+        text: `Leer nota (${n.title})`,
       }),
       onInteract: () => {
         playNoteSound();
@@ -390,8 +390,8 @@ export function createCollectiblesSystem(
       enabled: () => true,
       getPrompt: () => ({
         visible: true,
-        keyLabel: 'E',
-        text: `Presiona E para examinar ${ex.label}`,
+        keyLabel: 'CLIC IZQUIERDO',
+        text: `Examinar (${ex.label})`,
       }),
       onInteract: () => {
         playExamineSound();

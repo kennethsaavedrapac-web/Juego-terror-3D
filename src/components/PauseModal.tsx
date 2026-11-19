@@ -131,7 +131,7 @@ export const PauseModal: FC<PauseModalProps> = ({
         </fieldset>
 
         <div className="mt-5 border-t border-white/10 pt-4 text-[11px] leading-relaxed text-[#847e74]">
-          WASD: Mover · Shift: Correr · F: Linterna · E: Interactuar · Esc / P: Pausa
+          WASD: Mover · Shift: Correr · F: Linterna · Clic izq.: Interactuar · Esc / P: Pausa
         </div>
       </div>
     </div>

@@ -148,24 +148,41 @@ export const GameHud: FC<GameHudProps> = ({
       {/* Center Reticle & Contextual Interaction Prompt */}
       {!hud.finalCinematicActive && (
         <div
+          data-testid="hud-reticle"
+          data-target-active={hud.prompt.visible ? 'true' : 'false'}
+          data-target-locked={hud.prompt.visible && hud.prompt.locked ? 'true' : 'false'}
           className="pointer-events-none fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
           aria-hidden="true"
         >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
             <circle
-              cx="8"
-              cy="8"
-              r="2"
-              fill="#e5e2dc"
-              fillOpacity={hud.pointerLocked ? '0.85' : '0.45'}
+              cx="10"
+              cy="10"
+              r={hud.prompt.visible ? '2.4' : '2'}
+              fill={
+                hud.prompt.visible
+                  ? hud.prompt.locked
+                    ? '#f87171'
+                    : '#f6d57a'
+                  : '#e5e2dc'
+              }
+              fillOpacity={
+                hud.prompt.visible ? '0.96' : hud.pointerLocked ? '0.85' : '0.45'
+              }
             />
             <circle
-              cx="8"
-              cy="8"
-              r="6"
-              stroke="#000000"
-              strokeOpacity="0.45"
-              strokeWidth="1"
+              cx="10"
+              cy="10"
+              r={hud.prompt.visible ? '7.5' : '6'}
+              stroke={
+                hud.prompt.visible
+                  ? hud.prompt.locked
+                    ? '#b91c1c'
+                    : '#f6d57a'
+                  : '#000000'
+              }
+              strokeOpacity={hud.prompt.visible ? '0.78' : '0.45'}
+              strokeWidth={hud.prompt.visible ? '1.25' : '1'}
             />
           </svg>
         </div>
@@ -174,16 +191,62 @@ export const GameHud: FC<GameHudProps> = ({
       {!hud.finalCinematicActive && hud.prompt.visible && (
         <div
           data-testid="hud-interact-prompt"
-          className="pointer-events-none fixed left-1/2 top-[56%] z-20 flex -translate-x-1/2 items-center gap-2.5 border border-white/15 bg-[#080a0e]/90 px-4 py-2 text-xs tracking-wide text-[#ece8e0]"
+          className={`pointer-events-none fixed left-1/2 top-[56%] z-20 flex -translate-x-1/2 items-center gap-2.5 border bg-[#080a0e]/92 px-4 py-2 text-xs tracking-wide ${
+            hud.prompt.locked
+              ? 'border-[#b91c1c]/60 text-[#fecaca]'
+              : 'border-white/20 text-[#ece8e0]'
+          }`}
         >
           <span
-            className={`font-mono-tabular inline-flex h-5 min-w-5 items-center justify-center border px-1 text-[11px] font-semibold ${
+            className={`font-mono-tabular inline-flex items-center gap-1.5 border px-2 py-0.5 text-[11px] font-semibold ${
               hud.prompt.locked
                 ? 'border-[#b91c1c]/80 text-[#f87171]'
-                : 'border-white/30 text-[#ece8e0]'
+                : 'border-[#f6d57a]/45 text-[#f6d57a]'
             }`}
           >
-            {hud.prompt.keyLabel}
+            <svg
+              width="12"
+              height="16"
+              viewBox="0 0 12 16"
+              fill="none"
+              aria-hidden="true"
+              className="shrink-0"
+            >
+              <rect
+                x="1"
+                y="1"
+                width="10"
+                height="14"
+                rx="5"
+                stroke="currentColor"
+                strokeWidth="1.2"
+                strokeOpacity="0.85"
+              />
+              <path
+                d="M1.5 6C1.5 3.4 3.4 1.5 6 1.5V6.5H1.5V6Z"
+                fill="currentColor"
+                fillOpacity={hud.prompt.locked ? '0.65' : '0.95'}
+              />
+              <line
+                x1="6"
+                y1="1.2"
+                x2="6"
+                y2="6.6"
+                stroke="currentColor"
+                strokeWidth="1"
+                strokeOpacity="0.65"
+              />
+              <line
+                x1="1.2"
+                y1="6.6"
+                x2="10.8"
+                y2="6.6"
+                stroke="currentColor"
+                strokeWidth="1"
+                strokeOpacity="0.65"
+              />
+            </svg>
+            <span>{hud.prompt.keyLabel}</span>
           </span>
           <span>{hud.prompt.text}</span>
         </div>
@@ -220,7 +283,7 @@ export const GameHud: FC<GameHudProps> = ({
             className="text-right text-xs tracking-wide text-[#9e988e]"
             style={{ textShadow: '0 1px 3px rgba(0,0,0,0.9)' }}
           >
-            Clic para fijar ratón · F Linterna · E Interactuar · ←/→ o arrastrar para mirar
+            Clic para fijar ratón · Clic izq. Interactuar · F Linterna · ←/→ o arrastrar para mirar
           </div>
         )}
       </div>

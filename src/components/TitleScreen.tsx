@@ -64,7 +64,7 @@ export const TitleScreen: FC<TitleScreenProps> = ({ onStart }) => {
         <span aria-hidden="true">·</span>
         <span>F Linterna</span>
         <span aria-hidden="true">·</span>
-        <span>E Interactuar</span>
+        <span>Clic izquierdo Interactuar</span>
         <span aria-hidden="true">·</span>
         <span>Ratón Mirar</span>
         <span aria-hidden="true">·</span>

@@ -14,6 +14,22 @@ const MAX_PITCH = THREE.MathUtils.degToRad(78);
 const BASE_FOV = 70;
 const SPRINT_FOV = 76;
 
+export function shouldTriggerLeftClickInteract(params: {
+  active: boolean;
+  controlsLocked: boolean;
+  pointerLocked: boolean;
+  button: number;
+  isCanvasTarget: boolean;
+}): boolean {
+  return (
+    params.active &&
+    !params.controlsLocked &&
+    params.pointerLocked &&
+    params.button === 0 &&
+    params.isCanvasTarget
+  );
+}
+
 export class FirstPersonController {
   public readonly position = new THREE.Vector3(0, PLAYER_EYE_HEIGHT, 15.2);
   public yaw = 0;
@@ -28,6 +44,7 @@ export class FirstPersonController {
   private interactQueued = false;
   private flashlightQueued = false;
   private isDraggingLook = false;
+  private pointerLockAcquiredAt = 0;
   private lastPointerX = 0;
   private lastPointerY = 0;
   private distanceWalked = 0;
@@ -58,6 +75,9 @@ export class FirstPersonController {
       if (document.pointerLockElement === this.canvas) {
         document.exitPointerLock?.();
       }
+    } else {
+      this.interactQueued = false;
+      this.isDraggingLook = false;
     }
   }
 
@@ -253,9 +273,6 @@ export class FirstPersonController {
       e.preventDefault();
     }
     if (!this.controlsLocked) {
-      if (e.code === 'KeyE' && !e.repeat) {
-        this.interactQueued = true;
-      }
       if (e.code === 'KeyF' && !e.repeat) {
         this.flashlightQueued = true;
       }
@@ -279,19 +296,44 @@ export class FirstPersonController {
 
   private onPointerLockChangeHandler = () => {
     this.pointerLocked = document.pointerLockElement === this.canvas;
+    if (this.pointerLocked) {
+      this.pointerLockAcquiredAt = performance.now();
+      this.isDraggingLook = false;
+    } else {
+      this.interactQueued = false;
+      this.pointerLockAcquiredAt = 0;
+    }
     this.onPointerLockChange?.(this.pointerLocked);
   };
 
   private onMouseDown = (e: MouseEvent) => {
     if (!this.active) return;
     if (e.target !== this.canvas) return;
-    if (!this.pointerLocked) {
+
+    const wasPointerLocked =
+      this.pointerLocked || document.pointerLockElement === this.canvas;
+
+    // First click while unlocked only reacquires Pointer Lock / look control without triggering world objects.
+    if (!wasPointerLocked) {
       this.requestPointerLock();
-      if (!this.controlsLocked) {
+      if (!this.controlsLocked && e.button === 0) {
         this.isDraggingLook = true;
         this.lastPointerX = e.clientX;
         this.lastPointerY = e.clientY;
       }
+      return;
+    }
+
+    if (
+      shouldTriggerLeftClickInteract({
+        active: this.active,
+        controlsLocked: this.controlsLocked,
+        pointerLocked: wasPointerLocked,
+        button: e.button,
+        isCanvasTarget: e.target === this.canvas,
+      })
+    ) {
+      this.interactQueued = true;
     }
   };
 
@@ -305,8 +347,18 @@ export class FirstPersonController {
     let dy = 0;
 
     if (this.pointerLocked) {
-      dx = e.movementX || 0;
-      dy = e.movementY || 0;
+      const rawDx = e.movementX || 0;
+      const rawDy = e.movementY || 0;
+      const sinceLockMs = performance.now() - this.pointerLockAcquiredAt;
+      if (
+        (sinceLockMs < 250 && (Math.abs(rawDx) > 40 || Math.abs(rawDy) > 40)) ||
+        Math.abs(rawDx) > 320 ||
+        Math.abs(rawDy) > 320
+      ) {
+        return;
+      }
+      dx = THREE.MathUtils.clamp(rawDx, -140, 140);
+      dy = THREE.MathUtils.clamp(rawDy, -140, 140);
     } else if (this.isDraggingLook) {
       dx = e.clientX - this.lastPointerX;
       dy = e.clientY - this.lastPointerY;

@@ -56,7 +56,7 @@ export class InteractionSystem {
 
     if (candidates.length === 0) {
       this.activeTarget = null;
-      return { visible: false, keyLabel: 'E', text: '' };
+      return { visible: false, keyLabel: 'CLIC IZQUIERDO', text: '' };
     }
 
     for (let i = 0; i < this.occlusionMeshes.length; i++) {
@@ -68,7 +68,7 @@ export class InteractionSystem {
 
     if (hits.length === 0) {
       this.activeTarget = null;
-      return { visible: false, keyLabel: 'E', text: '' };
+      return { visible: false, keyLabel: 'CLIC IZQUIERDO', text: '' };
     }
 
     // Closest hit determines visibility: if a wall/occluder is closest, target behind it is blocked.
@@ -76,13 +76,13 @@ export class InteractionSystem {
     const hitId = firstHit.object.userData.interactId as string | undefined;
     if (!hitId) {
       this.activeTarget = null;
-      return { visible: false, keyLabel: 'E', text: '' };
+      return { visible: false, keyLabel: 'CLIC IZQUIERDO', text: '' };
     }
 
     const entry = this.entries.get(hitId);
     if (!entry || !entry.enabled() || firstHit.distance > entry.maxDistance) {
       this.activeTarget = null;
-      return { visible: false, keyLabel: 'E', text: '' };
+      return { visible: false, keyLabel: 'CLIC IZQUIERDO', text: '' };
     }
 
     this.activeTarget = entry;

@@ -375,24 +375,24 @@ export function createDoorSystem(
       interactions.registerInteractable({
         id: d.def.id,
         kind: 'door',
-        object: d.leaf,
+        object: d.pivot,
         maxDistance: DOOR_INTERACT_DISTANCE,
         enabled: () => true,
         getPrompt: () => {
           if (d.def.locked) {
             return {
               visible: true,
-              keyLabel: 'E',
+              keyLabel: 'CLIC IZQUIERDO',
               text: d.def.lockedMessage || 'Puerta cerrada con llave',
               locked: true,
             };
           }
           return {
             visible: true,
-            keyLabel: 'E',
+            keyLabel: 'CLIC IZQUIERDO',
             text: d.isOpen
-              ? `Presiona E para cerrar (${d.def.label})`
-              : `Presiona E para abrir (${d.def.label})`,
+              ? `Cerrar (${d.def.label})`
+              : `Abrir (${d.def.label})`,
             locked: false,
           };
         },
@@ -432,15 +432,15 @@ export function createDoorSystem(
         if (exitHooks.canUnlock()) {
           return {
             visible: true,
-            keyLabel: 'E',
+            keyLabel: 'CLIC IZQUIERDO',
             text: 'DESBLOQUEAR SALIDA',
             locked: false,
           };
         }
         return {
           visible: true,
-          keyLabel: 'E',
-          text: 'Puerta cerrada · Necesitas encontrar las tres llaves',
+          keyLabel: 'CLIC IZQUIERDO',
+          text: 'NECESITAS LAS 3 LLAVES',
           locked: true,
         };
       },

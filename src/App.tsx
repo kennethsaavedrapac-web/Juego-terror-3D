@@ -58,7 +58,7 @@ export default function App() {
     totalKeys: TOTAL_KEYS,
     objectiveText: 'Encuentra las tres llaves.',
     exitUnlocked: false,
-    prompt: { visible: false, keyLabel: 'E', text: '' },
+    prompt: { visible: false, keyLabel: 'CLIC IZQUIERDO', text: '' },
     notification: null,
     chaseBanner: null,
     finalCinematicActive: false,
@@ -222,7 +222,7 @@ export default function App() {
       }
 
       if (statusRef.current === 'reading') {
-        if (e.code === 'Escape' || e.code === 'KeyE') {
+        if (e.code === 'Escape') {
           e.preventDefault();
           handleCloseNote();
         }

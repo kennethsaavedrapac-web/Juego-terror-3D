@@ -61,7 +61,7 @@ function detectSoftwareWebGL(): boolean {
   }
 }
 
-const EMPTY_PROMPT: InteractPrompt = { visible: false, keyLabel: 'E', text: '' };
+const EMPTY_PROMPT: InteractPrompt = { visible: false, keyLabel: 'CLIC IZQUIERDO', text: '' };
 const CAUGHT_STAGE_DURATION = 0.22;
 const ATTACK_DURATION = 1.5;
 
