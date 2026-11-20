@@ -1,0 +1,6 @@
+# Robots.txt para DON'T LOOK BACK (https://juego-terror-3d.kenneth-studio.workers.dev/)
+User-agent: *
+Allow: /
+
+# Sitemap
+Sitemap: https://juego-terror-3d.kenneth-studio.workers.dev/sitemap.xml
